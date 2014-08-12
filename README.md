@@ -1,4 +1,4 @@
 PowerShell
 ==========
 
-PowerShell scripts
+PowerShell scripts posted on http://klemmestad.com
