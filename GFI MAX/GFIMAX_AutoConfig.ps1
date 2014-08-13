@@ -44,7 +44,7 @@ $DefaultPerfChecks = @(
 	   "instance" = "2" ; # Fails if committed memory is more than twice that of physical RAM
 	   "threshold1" = "10" ; # Fails if average available RAM is less than 10 MB
 	   "threshold2" = "5000"; # Fails if average pages/sec > 5000
-	   "threshold3" = "95"; # % Page file usage
+	   "threshold3" = "100"; # % Page file usage
 	   "threshold4" = "128" } # Nonpaged pool will be double this on 64-bit systems
 	@{ "checktype" = "PerfCounterCheck";
 	   "type" = "4"; # Network interfaces
@@ -530,10 +530,10 @@ If ($Performance -and ($AgentMode -eq "server")) # Performance monitoring is onl
 						[int]$nonpagedpool32bit = $Check.Item("threshold4")
 						[int]$TotalMemory = (Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory /(1024*1024)
 						[int]$nonpagedpool64bit = $Check.get_Item("threshold4")/4096*$TotalMemory
-						If ($nonpagedpool64bit -gt 256) 
+						If ($nonpagedpool64bit -gt $nonpagedpool32bit*2 ) 
 						{ 	$Check.Item("threshold4") = $nonpagedpool64bit.ToString() }
 						Else
-						{ 	$Check.Item("threshold4") = "256" }
+						{ 	$Check.Item("threshold4") = $nonpagedpool32bit*2  }
 
 					}
 					$New247Checks += $Check
