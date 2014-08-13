@@ -530,10 +530,10 @@ If ($Performance -and ($AgentMode -eq "server")) # Performance monitoring is onl
 						[int]$nonpagedpool32bit = $Check.Item("threshold4")
 						[int]$TotalMemory = (Get-WmiObject Win32_ComputerSystem).TotalPhysicalMemory /(1024*1024)
 						[int]$nonpagedpool64bit = $Check.get_Item("threshold4")/4096*$TotalMemory
-						If ($nonpagedpool64bit -gt $nonpagedpool32bit) 
+						If ($nonpagedpool64bit -gt 256) 
 						{ 	$Check.Item("threshold4") = $nonpagedpool64bit.ToString() }
 						Else
-						{ 	$Check.Item("threshold4") = $nonpagedpool32bit.ToString() }
+						{ 	$Check.Item("threshold4") = "256" }
 
 					}
 					$New247Checks += $Check
