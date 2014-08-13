@@ -212,7 +212,7 @@ If ($ApplyChanges)
 	}
 	If (!($ApplyChanges))
 	{
-		Write-Host "SCRIPT RE-RUN: Verifying Changes"
+		Write-Host "CHANGES APPLIED - Verifying changes:"
 	}
 }
 
@@ -497,7 +497,7 @@ If ($MSSQL)
 
 
 
-If ($Performance)
+If ($Performance -and ($AgentMode -eq "server")) # Performance monitoring is only available on servers
 {
 	Foreach ($Check in $DefaultPerfChecks)
 	{
@@ -577,7 +577,7 @@ If ($Performance)
 	}
 }
 
-if($PingCheck)
+if($PingCheck -and ($AgentMode -eq "server")) # Pingcheck only supported on servers
 {
 	$CurrentPingChecks = Get-GFIMAXChecks $247_Config.checks.PingCheck "name"
 	# Get the two closest IP addresses counted from device
@@ -772,7 +772,7 @@ If($ConfigChanged)
 Else
 {
 	# We have nothing to do. This Device has passed the test!
-	Write-Host "RESULT:"
+	Write-Host "CHECKS VERIFIED - Result:"
 	If ($Performance) 		{ Write-Host "Performance Monitoring checks verified: OK"}
 	If ($DriveSpaceCheck) 	{ Write-Host "Disk usage monitored on all harddrives: OK"}
 	If ($WinServiceCheck) 	{ Write-Host "All Windows services are now monitored: OK"}
