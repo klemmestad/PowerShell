@@ -4,7 +4,7 @@
 	Add or report according to script settings.
    
 .AUTHOR
-   Hugo L. Klemmestad <hugo@office-center.no>
+   Hugo L. Klemmestad <hugo@klemmestad.com>
 .DATE
    23.05.2014
 #>
