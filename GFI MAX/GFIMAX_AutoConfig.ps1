@@ -33,9 +33,11 @@ $Backup = $false # Configure a basic backup check if a compatible product is rec
 $Antivirus = $true # Configure an Antivirus check if a compatible product is recognized
 
 $DefaultPerfChecks = @(
-	@{ "checktype" = "PerfCounterCheck";
-	   "type" = "1"; # Processor Queue Length
-	   "threshold1" = "2" } # Recommended threshold by Microsoft
+# I do not recommend Processor Queue length at all. There are too many cases where
+# this counter misrepresents the actual load on modern Windows versions.
+#@{ "checktype" = "PerfCounterCheck";
+#	   "type" = "1"; # Processor Queue Length
+#	   "threshold1" = "2" } # Recommended threshold by Microsoft for Window NT(!)
 	@{ "checktype" = "PerfCounterCheck";
 	   "type" = "2"; # Average CPU Usage
 	   "threshold1" = "100" } # We are talking ALERTS here. We are not doing this for fun.
@@ -732,11 +734,9 @@ If($ConfigChanged)
 			$settingsContent["DAILYSAFETYCHECK"]["LASTCHECKDAY"] = "0"
 			$settingsChanged = $true
 		}
-		If ($settingsChanged)
-		{
-			# Write updated ini-file
-			Out-IniFile $settingsContent $IniFile
-		}
+		$settingsContent["GENERAL"]["NEXTCHECKUID"] = $uid
+		# Write updated ini-file
+		Out-IniFile $settingsContent $IniFile
 		Start-Service $gfimaxagent.Name
 		Write-Host "CHANGES APPLIED:"
 		If ($New247Checks) 
