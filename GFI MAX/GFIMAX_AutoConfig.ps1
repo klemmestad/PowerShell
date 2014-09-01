@@ -14,23 +14,36 @@
 ## SETTINGS
 # A few settings are handled as parameters 
 param (	
-	[switch]$ApplyChanges = $false, # -ApplyChanges will write new checks to configfiles and reload agent
-	[switch]$Clean = $false, # -Clean will dump any existing checks if -ApplyChanges is used
+	[switch]$All = $false,
+	[switch]$Apply = $false, # -Apply will write new checks to configfiles and reload agent
+	[switch]$Replace = $false, # Automated task only: -Replace will dump any existing checks if -Apply is used
+	[switch]$ReportMode = $false, # -ReportMode will report missing checks, but not fail the script
+	[switch]$Performance = $false, # Set to $false if you do not want performance checks
+	[switch]$PingCheck = $false, # This is useful on a Fault History report. Otherwise useless.
+	[switch]$MSSQL = $false, # Detect SQL servers
+	[switch]$SMART = $false, # Enable physical disk check if SMART status is available
+	[switch]$Backup = $false, # Configure a basic backup check if a compatible product is recognized
+	[switch]$Antivirus = $false, # Configure an Antivirus check if a compatible product is recognized	[string]$ServerInterval = "5", # 5 or 15 minutes
+	[string]$DriveSpaceCheck = $null, # Freespace as number+unit, i.e 10%, 5GB or 500MB
+	[string]$WinServiceCheck = "", # "All" or "DefaultOnly". 
+	[string]$DiskSpaceChange = $null, # percentage as integer
 	[string]$ServerInterval = "5", # 5 or 15 minutes
 	[string]$PCInterval = "30", # 30 or 60 minutes
-	[string]$DSCHour = "6" # When DSC check should run in whole hours. Minutes not supported by agent.
+	[string]$DSCHour = "8" # When DSC check should run in whole hours. Minutes not supported by agent.
 )
 
-## DEFAULT CHECKS
-$Performance = $true # Set to $false if you do not want performance checks
-$DriveSpaceCheck = "10%" # Freespace as number+unit, i.e 10%, 5GB or 500MB
-$WinServiceCheck = "All" # "All" or "DefaultOnly". 
-$DiskSpaceChange = 10 # percentage as integer
-$PingCheck = $true # This is useful on a Fault History report. Otherwise useless.
-$MSSQL = $false # Detect SQL servers
-$SMART = $true # Enable physical disk check if SMART status is available
-$Backup = $false # Configure a basic backup check if a compatible product is recognized
-$Antivirus = $true # Configure an Antivirus check if a compatible product is recognized
+If ($All)
+{
+	## DEFAULT CHECKS
+	$Performance = $true # Set to $false if you do not want performance checks
+	$PingCheck = $true # This is useful on a Fault History report. Otherwise useless.
+	$MSSQL = $true # Detect SQL servers
+	$SMART = $true # Enable physical disk check if SMART status is available
+	$Antivirus = $true # Configure an Antivirus check if a compatible product is recognized
+	$DriveSpaceCheck = "10%" # Freespace as number+unit, i.e 10%, 5GB or 500MB
+	$WinServiceCheck = "All" # "All" or "DefaultOnly". 
+	$DiskSpaceChange = 10 # percentage as integer
+}
 
 $DefaultPerfChecks = @(
 # I do not recommend Processor Queue length at all. There are too many cases where
@@ -196,10 +209,10 @@ $settingsContent = Get-IniContent($IniFile)
 $servicesContent = Get-IniContent($gfimaxpath + "\services.ini")
 
 # First of all, check if it is safe to make any changes
-If ($ApplyChanges)
+If ($Apply)
 {
 	# Make sure a failure to aquire settings correctly will disable changes
-	$ApplyChanges = $false
+	$Apply = $false
 	If ($settingsContent["DAILYSAFETYCHECK"]["RUNTIME"]) # This setting must exist
 	{
 		$lastRuntime = $settingsContent["DAILYSAFETYCHECK"]["RUNTIME"]
@@ -209,10 +222,10 @@ If ($ApplyChanges)
 		{
 			# If we have never been run or it is at least 6 minutes ago
 			# enable changes again
-			$ApplyChanges = $true
+			$Apply = $true
 		}
 	}
-	If (!($ApplyChanges))
+	If (!($Apply))
 	{
 		Write-Host "CHANGES APPLIED - Verifying changes:"
 	}
@@ -220,7 +233,7 @@ If ($ApplyChanges)
 
 
 # Read configuration of checks
-If ((Test-Path $247file) -and (-not $Clean)) 
+If (Test-Path $247file) 
 { 
 	[xml]$247_Config = Get-Content $247file
 	$247_Config.DocumentElement.SetAttribute("modified","1")
@@ -236,7 +249,7 @@ Else
 	$uid = 1
 }
 
-If ((Test-Path $DSCfile) -and (-not $Clean))
+If (Test-Path $DSCfile)
 { 
 	[xml]$DSC_Config = Get-Content $DSCfile 
 	$DSC_Config.DocumentElement.SetAttribute("modified","1")
@@ -258,7 +271,11 @@ Else
 [xml]$DeviceConfig = Get-Content $DeviceFile
 
 # Get next available UID from INI file
-$uid = [int]$settingsContent["GENERAL"]["NEXTCHECKUID"]
+# $uid = [int]$settingsContent["GENERAL"]["NEXTCHECKUID"]
+# Ini file cannot be trusted if script checks are being used
+$MaxUid = get-gfimaxchecks @($($247_Config.checks.ChildNodes | select uid), $($DSC_Config.checks.ChildNodes| select uid)) "uid" | measure -Maximum
+$uid = $MaxUid.Maximum + 1
+
 
 # Check Agent mode, workstation or server
 $AgentMode = $AgentConfig.agentconfiguration.agentmode
@@ -292,6 +309,13 @@ $NewDSCChecks = @()
 ## DISKSPACECHECK
 If ($DriveSpaceCheck)
 {
+	If ($Replace)
+	{
+		Foreach ($xmlCheck in $247_config.checks.DriveSpaceCheck) 
+		{
+		 	$null = $247_Config.checks.RemoveChild($xmlCheck) 
+		}
+	}
 	# Process parameters that need processing
 	$SpaceMatch = "^([0-9]+)([gmb%]+)"
 	$Spacetype = $DriveSpaceCheck -replace $SpaceMatch,'$2'
@@ -324,7 +348,14 @@ If ($DriveSpaceCheck)
 If ($DiskSpaceChange)
 {
 	
-	$CurrentDiskSpaceChange = Get-GFIMAXChecks $DSC_Config.checks.DiskSpaceChange "DriveLetter"
+	If ($Replace)
+	{
+		Foreach ($xmlCheck in $DSC_config.checks.DiskSpaceChange) 
+		{
+		 	$null = $DSC_Config.checks.RemoveChild($xmlCheck) 
+		}
+	}
+$CurrentDiskSpaceChange = Get-GFIMAXChecks $DSC_Config.checks.DiskSpaceChange "DriveLetter"
 
 	$DetectedDrives = Get-GFIMAXChecks $DeviceConfig.SelectNodes("//configuration/diskdrives/disk[removable='false']") "label"
 
@@ -349,6 +380,14 @@ $MonitoredServices = Get-GFIMAXChecks $247_Config.checks.winservicecheck "servic
 
 If ("All", "Default" -contains $WinServiceCheck)
 {
+	If ($Replace)
+	{
+		Foreach ($xmlCheck in $247_config.checks.WinServiceCheck) 
+		{
+		 	$null = $247_Config.checks.RemoveChild($xmlCheck) 
+		}
+		$MonitoredServices = @()
+	}
 	# An array to store names of services to monitor
 	$ServicesToAdd = @()
 	$ServicesToMonitor = @()
@@ -422,6 +461,14 @@ If ("All", "Default" -contains $WinServiceCheck)
 ## Detect any databases and add relevant checks
 If ($MSSQL)
 {
+	If ($Replace)
+	{
+		Foreach ($xmlCheck in $DSC_config.checks.FileSizeCheck) 
+		{
+		 	$null = $DSC_Config.checks.RemoveChild($xmlCheck) 
+		}
+	}	
+	
 	# Get any SQL services registered on device
 	[array]$sqlServices = Get-WmiObject win32_service | where { $_.Name -match "mssql*" -and $_.PathName -match "sqlservr.exe" }
 
@@ -463,28 +510,30 @@ If ($MSSQL)
 		{ 
 			# Retrieve any databases on instance
 			$dbs = $sqlhandle.Databases
-			
-			# Loop through logfiles and retain directory
-			$locations = @()
-			Foreach ($logfile in $dbs.LogFiles.FileName)
+			Foreach ($db in $dbs)
 			{
-				$parent = Split-Path -Parent $logfile
-				If ($locations -notcontains $parent) { $locations += $parent }
-			}
-			Foreach ($location in $locations)
-			{
-				If (!($CurrentFileSizeChecks -Contains "0|" + $location + "|*.ldf"))
+				# Loop through logfiles and retain directory
+				$locations = @()
+				Foreach ($logfile in $dbs.LogFiles.FileName)
 				{
-						$NewDSCChecks += @{	"checktype" = "FileSizeCheck";
-							"Name" = $instance;
-							"Threshold" = "5"; "Units" = "3|0";
-								# Units: 0 = Bytes, 1 = KBytes, 2 = MBytes, 3 = GBytes
-								# Units, element 2: 0 = Greater Than, 1 = Less Than
-							"Include" = "0|" + $location + "|*.ldf";
-								# First element: 1 = Include subfolders, 0 = This folder only
-								# Second element: Folder where files are located
-								# Third element: File pattern
-							"Exclude" = "" }# Same syntax as Include 
+					$parent = Split-Path -Parent $logfile
+					If ($locations -notcontains $parent) { $locations += $parent }
+				}
+				Foreach ($location in $locations)
+				{
+					If (!($CurrentFileSizeChecks -Contains "0|" + $location + "|*.ldf"))
+					{
+							$NewDSCChecks += @{	"checktype" = "FileSizeCheck";
+								"Name" = $instance;
+								"Threshold" = "5"; "Units" = "3|0";
+									# Units: 0 = Bytes, 1 = KBytes, 2 = MBytes, 3 = GBytes
+									# Units, element 2: 0 = Greater Than, 1 = Less Than
+								"Include" = "0|" + $location + "|*.ldf";
+									# First element: 1 = Include subfolders, 0 = This folder only
+									# Second element: Folder where files are located
+									# Third element: File pattern
+								"Exclude" = "" }# Same syntax as Include 
+					}
 				}
 			}
 		}
@@ -501,6 +550,13 @@ If ($MSSQL)
 
 If ($Performance -and ($AgentMode -eq "server")) # Performance monitoring is only available on servers
 {
+	If ($Replace)
+	{
+		Foreach ($xmlCheck in $247_config.checks.PerfCounterCheck) 
+		{
+		 	$null = $247_Config.checks.RemoveChild($xmlCheck) 
+		}
+	}
 	Foreach ($Check in $DefaultPerfChecks)
 	{
 		Switch ($Check.get_Item("type"))
@@ -581,6 +637,14 @@ If ($Performance -and ($AgentMode -eq "server")) # Performance monitoring is onl
 
 if($PingCheck -and ($AgentMode -eq "server")) # Pingcheck only supported on servers
 {
+	If ($Replace)
+	{
+		Foreach ($xmlCheck in $DSC_config.checks.PingCheck) 
+		{
+		 	$null = $DSC_Config.checks.RemoveChild($xmlCheck) 
+		}
+	}	
+	
 	$CurrentPingChecks = Get-GFIMAXChecks $247_Config.checks.PingCheck "name"
 	# Get the two closest IP addresses counted from device
 	$trace = @()
@@ -609,6 +673,14 @@ if($PingCheck -and ($AgentMode -eq "server")) # Pingcheck only supported on serv
 
 If ($Backup)
 {
+	If ($Replace)
+	{
+		Foreach ($xmlCheck in $DSC_config.checks.BackupCheck) 
+		{
+		 	$null = $DSC_Config.checks.RemoveChild($xmlCheck) 
+		}
+	}	
+	
 	$CurrentBackupChecks = Get-GFIMAXChecks $DSC_Config.checks.BackupCheck "BackupProduct"
 	$DetectedBackups = Get-GFIMAXChecks $DeviceConfig.configuration.backups "name"
 	Foreach ($BackupProduct in $DetectedBackups)
@@ -629,11 +701,19 @@ If ($Backup)
 
 If ($Antivirus)
 {
+	If ($Replace)
+	{
+		Foreach ($xmlCheck in $DSC_config.checks.AVUpdateCheck) 
+		{
+		 	$null = $DSC_Config.checks.RemoveChild($xmlCheck) 
+		}
+	}	
+	
 	$CurrentAntivirusChecks = Get-GFIMAXChecks $DSC_Config.checks.AVUpdateCheck "AVProduct"
 	$DetectedAntiviruses = Get-GFIMAXChecks $DeviceConfig.configuration.antiviruses "name"
 	Foreach ($AVProduct in $DetectedAntiviruses)
 	{
-		If ($CurrentAntivirusChecks -notcontains $AVProduct)
+		If (($CurrentAntivirusChecks -notcontains $AVProduct) -and ($AVProduct -notmatch "Managed Antivirus"))
 		{
 
 			$NewDSCChecks += @{ "checktype" = "AVUpdateCheck";
@@ -716,28 +796,35 @@ If($NewDSCChecks[0])
 	$ConfigChanged = $true
 }
 
-If($ConfigChanged) 
+If($ConfigChanged)
 { 
 	
-	If ($ApplyChanges)
+	If ($Apply)
 	{
-		Stop-Service $gfimaxagent.Name
-		If ($New247Checks) { $247_Config.Save($247file) }
 		If ($NewDSCChecks) 
 		{ 
-			$DSC_Config.Save($DSCfile) 
 			# Update last runtime to prevent changes too often
 			[int]$currenttime = $(get-date -UFormat %s) -replace ",","." # Handle decimal comma 
 			$settingsContent["DAILYSAFETYCHECK"]["RUNTIME"] = $currenttime
 			
 			# Clear lastcheckday to make DSC run immediately
 			$settingsContent["DAILYSAFETYCHECK"]["LASTCHECKDAY"] = "0"
-			$settingsChanged = $true
 		}
+		# Save updated NEXTCHECKUID
 		$settingsContent["GENERAL"]["NEXTCHECKUID"] = $uid
-		# Write updated ini-file
+		
+		# Stop agent before writing new config files
+		Stop-Service $gfimaxagent.Name
+		
+		# Save all config files
+		$247_Config.Save($247file)
+		$DSC_Config.Save($DSCfile)
 		Out-IniFile $settingsContent $IniFile
+		
+		# Start monitoring agent again
 		Start-Service $gfimaxagent.Name
+		
+		# Write output to Dashboard
 		Write-Host "CHANGES APPLIED:"
 		If ($New247Checks) 
 		{
@@ -754,7 +841,7 @@ If($ConfigChanged)
 	}
 	Else
 	{
-		Write-Host "CHECKS MISSING:"
+		Write-Host "SUGGESTED CHANGES:"
 		If ($New247Checks) 
 		{
 			Write-Host "`n-- 24/7 check(s):"
@@ -766,7 +853,14 @@ If($ConfigChanged)
 			Format-Output $NewDSCChecks 
 		}
 		If ($settingsChanged) { Write-host "`n-- Update INI-file with default settings."}
-		Exit 1000 # Internal status code: Suggested changes, but nothing has been touched
+		If ($ReportMode)
+		{
+			Exit 0 # Needed changes have been reported, but do not fail the check
+		}
+		Else
+		{
+			Exit 1000 # Internal status code: Suggested changes, but nothing has been touched
+		}
 	}
 }
 Else
