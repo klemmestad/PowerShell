@@ -46,11 +46,9 @@ If ($All)
 }
 
 $DefaultPerfChecks = @(
-# I do not recommend Processor Queue length at all. There are too many cases where
-# this counter misrepresents the actual load on modern Windows versions.
-#@{ "checktype" = "PerfCounterCheck";
-#	   "type" = "1"; # Processor Queue Length
-#	   "threshold1" = "2" } # Recommended threshold by Microsoft for Window NT(!)
+	@{ "checktype" = "PerfCounterCheck";
+	   "type" = "1"; # Processor Queue Length
+	   "threshold1" = "2" } # Recommended threshold by Microsoft for physical servers.
 	@{ "checktype" = "PerfCounterCheck";
 	   "type" = "2"; # Average CPU Usage
 	   "threshold1" = "100" } # We are talking ALERTS here. We are not doing this for fun.
@@ -566,6 +564,11 @@ If ($Performance -and ($AgentMode -eq "server")) # Performance monitoring is onl
 				$CurrentPerfChecks = Get-GFIMAXChecks $247_Config.checks.PerfCounterCheck "type"
 				If(!($CurrentPerfChecks -Contains $Check.get_Item("type")))
 				{
+					$ThisDevice = Get-WmiObject Win32_ComputerSystem
+					If ($ThisDevice.Model -match "^virtual|^vmware") 
+					{
+						$Check.Item("threshold1") = $([int]$Check.get_Item("threshold1") * 3).ToString()
+					}
 					$New247Checks += $Check
 				}
 			}
@@ -574,8 +577,7 @@ If ($Performance -and ($AgentMode -eq "server")) # Performance monitoring is onl
 				$CurrentPerfChecks = Get-GFIMAXChecks $247_Config.checks.PerfCounterCheck "type"
 				If(!($CurrentPerfChecks -Contains $Check.get_Item("type")))
 				{
-					$ThisDevice = Get-WmiObject Win32_ComputerSystem
-					If ($ThisDevice.Model -inotmatch "^virtual|^vmware") { $New247Checks += $Check }
+					$New247Checks += $Check
 				}
 			}
 			3
@@ -599,17 +601,22 @@ If ($Performance -and ($AgentMode -eq "server")) # Performance monitoring is onl
 			}
 			4 # Needs network interfaces
 			{
-				$CurrentPerfChecks = Get-GFIMAXChecks $247_Config.checks.SelectNodes("PerfCounterCheck[type=4]|PerfCounterCheck[Type=4]") "Instance"
-				$NetConnections = Get-GFIMAXChecks $DeviceConfig.configuration.networkadapters "name"
-
-				Foreach ($Adapter in $NetConnections | where {$_ -notmatch "isatap" -and $_ -notmatch "Teredo"})
+				# Don't bother on Hyper-V. The network adapters may change on a new node.
+				$ThisDevice = Get-WmiObject Win32_ComputerSystem
+				If ($ThisDevice.Model -notmatch "^virtual") 
 				{
-					If (!($CurrentPerfChecks -Contains $Adapter))
+					$CurrentPerfChecks = Get-GFIMAXChecks $247_Config.checks.SelectNodes("PerfCounterCheck[type=4]|PerfCounterCheck[Type=4]") "Instance"
+					$NetConnections = Get-GFIMAXChecks $DeviceConfig.configuration.networkadapters "name"
+
+					Foreach ($Adapter in $NetConnections | where {$_ -notmatch "isatap" -and $_ -notmatch "Teredo"})
 					{
-						$tmpCheck = New-Object -TypeName Hashtable
-						Foreach ($key in $Check.Keys) { $tmpCheck.Item($key) = $Check.get_Item($key) }
-						$tmpCheck.Item("instance") = $Adapter
-						$New247Checks += $tmpCheck
+						If (!($CurrentPerfChecks -Contains $Adapter))
+						{
+							$tmpCheck = New-Object -TypeName Hashtable
+							Foreach ($key in $Check.Keys) { $tmpCheck.Item($key) = $Check.get_Item($key) }
+							$tmpCheck.Item("instance") = $Adapter
+							$New247Checks += $tmpCheck
+						}
 					}
 				}
 			}
@@ -801,15 +808,13 @@ If($ConfigChanged)
 	
 	If ($Apply)
 	{
-		If ($NewDSCChecks) 
-		{ 
-			# Update last runtime to prevent changes too often
-			[int]$currenttime = $(get-date -UFormat %s) -replace ",","." # Handle decimal comma 
-			$settingsContent["DAILYSAFETYCHECK"]["RUNTIME"] = $currenttime
-			
-			# Clear lastcheckday to make DSC run immediately
-			$settingsContent["DAILYSAFETYCHECK"]["LASTCHECKDAY"] = "0"
-		}
+		# Update last runtime to prevent changes too often
+		[int]$currenttime = $(get-date -UFormat %s) -replace ",","." # Handle decimal comma 
+		$settingsContent["DAILYSAFETYCHECK"]["RUNTIME"] = $currenttime
+		
+		# Clear lastcheckday to make DSC run immediately
+		$settingsContent["DAILYSAFETYCHECK"]["LASTCHECKDAY"] = "0"
+		
 		# Save updated NEXTCHECKUID
 		$settingsContent["GENERAL"]["NEXTCHECKUID"] = $uid
 		
