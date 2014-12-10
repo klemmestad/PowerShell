@@ -1,4 +1,4 @@
-﻿<#
+﻿ <#
 .DESCRIPTION
 	Scan an SNMP target for known OIDs with values.
 	Add SNMP checks to agent.
@@ -14,8 +14,14 @@ Param (
 	[string]$Target = "localhost",
 	[int]$UDPport = 161,
 	[switch]$Apply = $false,
-	[switch]$ReportMode = $true
+	[string]$ReportMode = "On"
 )
+# Invert Reportmode
+If ($ReportMode -match 'y|yes|On|true') { 
+	$ReportMode = $true 
+} Else {
+	$ReportMode = $false 
+}
 
 ## VARIUS FUNCTIONS
 # Return an array of values from an array of XML Object
