@@ -1,6 +1,6 @@
 ﻿[CmdletBinding(SupportsShouldProcess=$false, 
 	PositionalBinding=$false,
-	HelpUri = 'http://klemmestad.com/2014/09/19/add-checks-to-gfi-max-using-powershell/',
+	HelpUri = 'http://klemmestad.com/2014/12/22/automate-maxfocus-with-powershell/',
 	ConfirmImpact='Medium')]
 [OutputType([String])]
 <#
@@ -22,7 +22,7 @@
    Correct XML configuration files that will reconfigure an MAXfocus agent
    upon agent restart.
 .LINK
-   http://klemmestad.com/2014/09/19/add-checks-to-gfi-max-using-powershell/
+   http://klemmestad.com/2014/12/22/automate-maxfocus-with-powershell/
 .LINK
    https://www.maxfocus.com/remote-management/automated-maintenance
 .FUNCTIONALITY
@@ -43,7 +43,8 @@ param (
 	
 	# -ReportMode will report missing checks, but not fail the script
     [Parameter(Mandatory=$false)]
-	[switch]$ReportMode = $false, 
+    [ValidateSet("On", "Off")]
+	[string]$ReportMode = "On",
 
 	# Set to $false if you do not want performance checks
     [Parameter(Mandatory=$false)]
@@ -107,6 +108,13 @@ param (
     [Parameter(Mandatory=$false)]
 	[switch]$Library = $false 
 )
+
+# Convert Reportmode to Boolean
+If ($ReportMode -eq 'On') { 
+	[bool]$ReportMode = $true 
+} Else {
+	[bool]$ReportMode = $false 
+}
 
 Set-StrictMode -Version 2
 
