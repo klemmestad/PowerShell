@@ -149,13 +149,7 @@ function Make-ScriptAvailable ([string]$ScriptName) {
 		$Source = $Scripts[$ScriptName]["url"]
 		$Destination = $ScriptDir + $ScriptName
 		$webclient.DownloadFile($Source,$Destination)
-	} ElseIf ($ScriptName -eq "script_1024_38.ps1") {
-		If (!(Get-Content $ScriptPath | Select-String "PowerCli 4.x does not provide GB values" -quiet)) {
-			$Source = $Scripts[$ScriptName]["url"]
-			$Destination = $ScriptDir + $ScriptName
-			$webclient.DownloadFile($Source,$Destination)
-		}
-	}
+	} 
 }
 
 # Downloaded from 
@@ -238,6 +232,7 @@ $ScriptLib = $ScriptDir + "lib\"
 $ConfigChanged = $false
 
 $webclient = New-Object System.Net.WebClient
+[System.Net.ServicePointManager]::securityProtocol = 'ssl3'
 
 # Read ini-files
 $settingsContent = Get-IniContent($IniFile)
@@ -270,8 +265,7 @@ foreach( $oSnapIn in Get-PSSnapIn -Registered ) {
 #
 
 # Read configuration of checks. Create an XML object if they do not exist yet.
-$MaxUid = @()
-ForEach ($Set in $Sets + "ST") {
+ForEach ($Set in $Sets) {
 	$XmlConfig[$Set]  = New-Object -TypeName XML
 	$XmlFile[$Set] = $gfimaxpath + "\{0}_Config.xml" -f $Set
 	If (Test-Path $XmlFile[$Set]) { 
@@ -285,20 +279,7 @@ ForEach ($Set in $Sets + "ST") {
 		$result = $XmlConfig[$Set].AppendChild($rootNode)
 		$uid = 1
 	}
-	$MaxUid +=  ($XmlConfig[$Set].checks.ChildNodes | select -Expandproperty uid | measure -Maximum).Maximum
 }
-
-$MaxUid = $MaxUid | Measure -Maximum
-$InUseUid = $MaxUid.Maximum + 1
-
-$SettingsUid = $settingsContent["GENERAL"]["NEXTCHECKUID"]
-
-If($SettingsUid -gt $InUseUid) {
-	[int]$uid = $SettingsUid
-} Else {
-	[int]$uid = $InUseUid
-}
-
 
 
 [array]$EsxHosts = @([regex]::Split($Hosts,"[,\s]"))
@@ -321,7 +302,7 @@ ForEach ($EsxHost in $EsxHosts) {
 		$CurrentScriptChecks = @($XmlConfig.Values | % { $_.checks.ScriptCheck } | where {($_.scriptname.Innertext -eq $ScriptName -or $_.scriptname -eq $ScriptName) -and ($_.arguments.Innertext -match $EsxHost -or $_.arguments -match $EsxHost)})
 	 	$CheckExists = $false
 		Foreach ($xmlCheck in $CurrentScriptChecks) {
-			If ($false) { #($xmlCheck.arguments.InnerText -eq $Arguments -or $xmlCheck.arguments -eq $Arguments ) -and ($CurrentScriptChecks.Count -eq 1) -and $xmlCheck.BaseURI.Contains($Check.checkset)) {
+			If (($xmlCheck.arguments.InnerText -eq $Arguments -or $xmlCheck.arguments -eq $Arguments ) -and ($CurrentScriptChecks.Count -eq 1) -and $xmlCheck.BaseURI.Contains($Check.checkset)) {
 			 	$CheckExists = $true
 			} Else {
 				$null = $xmlCheck.ParentNode.RemoveChild($xmlCheck) 
@@ -349,9 +330,7 @@ If($NewChecks[0]) {
 	Foreach ($Check in $NewChecks) {
 		$xmlCheck = $XmlConfig[$Check.checkset].CreateElement($Check.checktype)
 		$xmlCheck.SetAttribute('modified', '1')
-		$xmlCheck.SetAttribute('uid', $uid)
-		$uid++ # Increase unique ID identifier to keep it unique
-		
+	
 		Foreach ($property in $Check.Keys) {
 		 	If ("checkset", "checktype" -notcontains $property) {
 				$xmlProperty = $XmlConfig[$Check.checkset].CreateElement($property)
@@ -384,9 +363,6 @@ If($ConfigChanged) {
 		
 		# Clear lastcheckday to make DSC run immediately
 		$settingsContent["DAILYSAFETYCHECK"]["LASTCHECKDAY"] = "0"
-		
-		# Save updated NEXTCHECKUID
-		$settingsContent["GENERAL"]["NEXTCHECKUID"] = $uid
 		
 		# Stop agent before writing new config files
 		Stop-Service $gfimaxagent.Name

@@ -1,4 +1,9 @@
-﻿ <#
+﻿[CmdletBinding(SupportsShouldProcess=$false, 
+      PositionalBinding=$false,
+      HelpUri = 'http://klemmestad.com/2014/12/10/add-snmp-checks-to-maxfocus-automatically/',
+      ConfirmImpact='Medium')]
+[OutputType([String])]
+ <#
 .DESCRIPTION
 	Scan an SNMP target for known OIDs with values.
 	Add SNMP checks to agent.
@@ -7,20 +12,34 @@
    Hugo L. Klemmestad <hugo@klemmestad.com>
 .DATE
    003.11.2014
+.LINK
+   http://klemmestad.com/2014/12/10/add-snmp-checks-to-maxfocus-automatically/
 #>
 
 Param (
+	[Parameter(Mandatory=$false)]
+    [ValidateNotNullOrEmpty()]
 	[string]$Community = "public",
-	[string]$Target = "localhost",
+
+	[Parameter(Mandatory=$false)]
+	[array]$Target = "localhost",
+
+	[Parameter(Mandatory=$false)]
+    [ValidateScript({$_ -ge 1 -and $_ -le 65535})]
 	[int]$UDPport = 161,
+
+	[Parameter(Mandatory=$false)]
 	[switch]$Apply = $false,
+
+	[Parameter(Mandatory=$false)]
+    [ValidateSet("On", "Off")]
 	[string]$ReportMode = "On"
 )
 # Invert Reportmode
-If ($ReportMode -match 'y|yes|On|true') { 
-	$ReportMode = $true 
+If ($ReportMode -eq 'On') { 
+	[bool]$ReportMode = $true 
 } Else {
-	$ReportMode = $false 
+	[bool]$ReportMode = $false 
 }
 
 ## VARIUS FUNCTIONS
@@ -154,7 +173,7 @@ function Invoke-SNMPget ([string]$sIP, $sOIDs, [string]$Community = "public", [i
 	$svr = New-Object System.Net.IpEndPoint ($ip, $UDPport)
  
     # Use SNMP v2
-    $ver = [Lextm.SharpSnmpLib.VersionCode]::V1
+    $ver = [Lextm.SharpSnmpLib.VersionCode]::V2
  
     # Perform SNMP Get
     try {
@@ -224,7 +243,7 @@ $XmlFile = @{}
 # We need an array of hashes to remember which checks to add
 $NewChecks = @()
 
-$Sets = @("247", "DSC")
+$Sets = @("247")
 
 # Other Pathnames
 $IniFile = $gfimaxpath + "\settings.ini"
@@ -249,29 +268,8 @@ If (!(Test-Path $SNMP_lib)) {
 
 $null = [reflection.assembly]::LoadFrom($SNMP_lib)
 
-# First of all, check if it is safe to make any changes
-If ($Apply) {
-	# Make sure a failure to aquire settings correctly will disable changes
-	$Apply = $false
-	If ($settingsContent["DAILYSAFETYCHECK"]["RUNTIME"]) { # This setting must exist
-		$lastRuntime = $settingsContent["DAILYSAFETYCHECK"]["RUNTIME"]
-		[int]$currenttime = $((Get-Date).touniversaltime() | get-date -UFormat %s) -replace ",","." # Handle decimal comma 
-		$timeSinceLastRun = $currenttime - $lastRuntime
-		If($lastRuntime -eq 0 -or $timeSinceLastRun -gt 360) {
-			# If we have never been run or it is at least 6 minutes ago
-			# enable changes again
-			$Apply = $true
-		}
-	}
-	If (!($Apply)) {
-		Write-Host "CHANGES APPLIED - Verifying changes:"
-	}
-}
-
-
 # Read configuration of checks. Create an XML object if they do not exist yet.
-$MaxUid = @()
-ForEach ($Set in $Sets + "ST") {
+ForEach ($Set in $Sets) {
 	$XmlConfig[$Set]  = New-Object -TypeName XML
 	$XmlFile[$Set] = $gfimaxpath + "\{0}_Config.xml" -f $Set
 	If (Test-Path $XmlFile[$Set]) { 
@@ -283,20 +281,7 @@ ForEach ($Set in $Sets + "ST") {
 		$result = $rootNode.SetAttribute("modified", "1")
 		$result = $XmlConfig[$Set].InsertBefore($decl, $XmlConfig[$Set].DocumentElement)
 		$result = $XmlConfig[$Set].AppendChild($rootNode)
-		$uid = 1
 	}
-	$MaxUid +=  ($XmlConfig[$Set].checks.ChildNodes | select -Expandproperty uid | measure -Maximum).Maximum
-}
-
-$MaxUid = $MaxUid | Measure -Maximum
-$InUseUid = $MaxUid.Maximum + 1
-
-$SettingsUid = $settingsContent["GENERAL"]["NEXTCHECKUID"]
-
-If($SettingsUid -gt $InUseUid) {
-	[int]$uid = $SettingsUid
-} Else {
-	[int]$uid = $InUseUid
 }
 
 # Check Agent mode, workstation or server
@@ -329,8 +314,6 @@ If ($Target -match "/") {
 			}
 		}
 	}
-} Else {
-	$SNMPhosts = $Target.Split(", ")
 }
 
 
@@ -365,7 +348,7 @@ ForEach ($SNMPhost in $SNMPhosts) {
 					"oid" = $oid;
 					"op" = $preset.op;
 					"testvalue" = $preset.testvalue;
-					"snmpversion" = 1
+					"snmpversion" = 2
 					}
 				
 				$NewChecks += $NewCheck
@@ -379,9 +362,7 @@ If($NewChecks[0])
 	Foreach ($Check in $NewChecks) {
 		$xmlCheck = $XmlConfig[$Check.checkset].CreateElement($Check.checktype)
 		$xmlCheck.SetAttribute('modified', '1')
-		$xmlCheck.SetAttribute('uid', $uid)
-		$uid++ # Increase unique ID identifier to keep it unique
-		
+	
 		Foreach ($property in $Check.Keys) {
 		 	If ("checkset", "checktype" -notcontains $property) {
 				$xmlProperty = $XmlConfig[$Check.checkset].CreateElement($property)
@@ -404,19 +385,23 @@ If($NewChecks[0])
 	$ConfigChanged = $true
 	
 	If ($Apply) {
-		# Save updated NEXTCHECKUID
-		$settingsContent["GENERAL"]["NEXTCHECKUID"] = $uid
-		
-		# Stop agent before writing new config files
-		Stop-Service $gfimaxagent.Name
 		
 		# Save all config files
 		$XmlConfig["247"].Save($XmlFile["247"])
 		
-		Out-IniFile $settingsContent $IniFile
 		
-		# Start monitoring agent again
-		Start-Service $gfimaxagent.Name
+		# Restart monitoring agent with a scheduled task with 2 minutes delay.
+		# Register a new task if it does not exist, set a new trigger if it does.
+		Import-Module PSScheduledJob
+		$JobTime = (Get-Date).AddMinutes(2)
+		$JobTrigger = New-JobTrigger -Once -At $JobTime.ToShortTimeString()
+		$JobOption = New-ScheduledJobOption -StartIfOnBattery -RunElevated 
+		$RegisteredJob = Get-ScheduledJob -Name RestartAdvancedMonitoringAgent -ErrorAction SilentlyContinue
+		If ($RegisteredJob) {
+			Set-ScheduledJob $RegisteredJob -Trigger $JobTrigger
+		} Else {
+			Register-ScheduledJob -Name RestartAdvancedMonitoringAgent -ScriptBlock { Restart-Service 'Advanced Monitoring Agent' } -Trigger $JobTrigger -ScheduledJobOption $JobOption
+		}		
 		
 		# Write output to Dashboard
 		Write-Host "Checks added:"

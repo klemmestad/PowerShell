@@ -1,129 +1,143 @@
-﻿<#
+﻿[CmdletBinding(SupportsShouldProcess=$false, 
+	PositionalBinding=$false,
+	HelpUri = 'http://klemmestad.com/2014/09/19/add-checks-to-gfi-max-using-powershell/',
+	ConfirmImpact='Medium')]
+[OutputType([String])]
+<#
+.Synopsis
+   Compares existing configuration of a MAXfocus monitoring agent against
+   default settings stored in this script. Can add missing default checks
+   automatically.
 .DESCRIPTION
-	Detect missing checks automatically.
-	Add or report according to script settings.
-   
-.AUTHOR
-   Hugo L. Klemmestad <hugo@klemmestad.com>
-.DATE
-   23.05.2014
+   The script is to be uploaded to your dashboard account as a user script.
+   It can run both as a script check and as a scheduled task. You select
+   check types to verify on a agent by giving the script parameters.
+.EXAMPLE
+   Verify-MAXfocusConfig -Apply -All
+.EXAMPLE
+   Verify-MAXfocusConfig -Apply -WinServiceCheck All
+.EXAMPLE
+   Verify-MAXfocusConfig -Apply -Performance -SMART -ServerInterval 15 -All
+.OUTPUTS
+   Correct XML configuration files that will reconfigure an MAXfocus agent
+   upon agent restart.
+.LINK
+   http://klemmestad.com/2014/09/19/add-checks-to-gfi-max-using-powershell/
+.LINK
+   https://www.maxfocus.com/remote-management/automated-maintenance
+.FUNCTIONALITY
+   When the script finds that checks has to be added it will create valid XML
+   entries and add them to agent configuration files. It uses Windows scheduled
+   tasks to restart agent after the script completes.
 #>
-
-
 
 ## SETTINGS
 # A few settings are handled as parameters 
 param (	
+	# Accept all default check values in one go
+    [Parameter(Mandatory=$false)]
 	[switch]$All = $false,
-	[switch]$ReUid = $false, # For when this script as messed up your monitoring configuration
+
+    [Parameter(Mandatory=$false)]
 	[switch]$Apply = $false, # -Apply will write new checks to configfiles and reload agent
-	[switch]$Replace = $false, # Automated task only: -Replace will dump any existing checks if -Apply is used
-	[switch]$ReportMode = $true, # -ReportMode will report missing checks, but not fail the script
-	[switch]$Performance = $false, # Set to $false if you do not want performance checks
-	[switch]$PingCheck = $false, # This is useful on a Fault History report. Otherwise useless.
-	[switch]$MSSQL = $false, # Detect SQL servers
-	[switch]$SMART = $false, # Enable physical disk check if SMART status is available
-	[switch]$Backup = $false, # Configure a basic backup check if a compatible product is recognized
-	[switch]$Antivirus = $false, # Configure an Antivirus check if a compatible product is recognized	
-	[switch]$LogChecks = $false, # Configure default log checks
-	[string]$DriveSpaceCheck = $null, # Freespace as number+unit, i.e 10%, 5GB or 500MB
-	[string]$WinServiceCheck = "", # "All" or "DefaultOnly". 
-	[string]$DiskSpaceChange = $null, # percentage as integer
-	[string]$ServerInterval = "5", # 5 or 15 minutes
-	[string]$PCInterval = "30", # 30 or 60 minutes
-	[string]$DSCHour = "8", # When DSC check should run in whole hours. Minutes not supported by agent.
-	[int]$Weekday = 7 # When detected changes should be applied
-)
-
-# Force the script to output something to STDOUT, else errors may cause script timeout.
-Write-Host " "
-
-If ($All)
-{
-	## DEFAULT CHECKS
-	$Performance = $false # Set to $false if you do not want performance checks
-	$PingCheck = $false # This is useful on a Fault History report. Otherwise useless.
-	$MSSQL = $true # Detect SQL servers
-	$SMART = $true # Enable physical disk check if SMART status is available
-	$Antivirus = $true # Configure an Antivirus check if a compatible product is recognized
-	$DriveSpaceCheck = "10%" # Freespace as number+unit, i.e 10%, 5GB or 500MB
-	$WinServiceCheck = "All" # "All" or "Default". 
-	$DiskSpaceChange = 10 # percentage as integer
-	$Backup = $false # Try to configure Backup Monitoring
-	$LogChecks = $true # Configure default eventlog checks
-	$PMSchedule = "Wed@4" # Wednesdays at 4 AM
-}
-
-$DefaultLogChecks = @(
-	@{ "log" = "Application|Application Hangs"; # Application log | Human readable name
-	   "flags" = 32512;
-	   "ids" = "*";
-	   "source" = "Application Hang" }
-	@{ "log" = "System|NTFS Errors";
-	   "flags" = 32513;
-	   "ids" = "*";
-	   "source" = "Ntfs*" }
-	@{ "log" = "System|BSOD Stop Errors";
-	   "flags" = 32513;
-	   "ids" = "1003";
-	   "source" = "System" }
-)	   
-
-$DefaultCriticalEvents = @(
-	@{ "eventlog" = "Directory Service";
-	   "mode" = 1 }
-	@{ "eventlog" = "File Replication Service";
-	   "mode" = 1 }
-	@{ "eventlog" = "HardwareEvents";
-	   "mode" = 1 }
-	@{ "eventlog" = "System";
-	   "mode" = 0 }
-	@{ "eventlog" = "Application";
-	   "mode" = 0 }
-)
-
-$DoNotMonitorServices = @( # Services you do not wish to monitor, regardless
-	"wuauserv", # Windows Update Service. Does not run continously.
-	"gupdate", "gupdatem", # Google Update Services. Does not always run.
-	"AdobeARMservice", # Another service you may not want to monitor
-	"Windows Agent Maintenance Service", # Clean up after N-Able
-	"Windows Agent Service",
-	"RSMWebServer"
-)
-$AlwaysMonitorServices = @( # Services that always are to be monitored if present and autorun
-	"wecsvc" # Windows Event Collector
-)
 	
+	# -ReportMode will report missing checks, but not fail the script
+    [Parameter(Mandatory=$false)]
+	[switch]$ReportMode = $false, 
+
+	# Set to $false if you do not want performance checks
+    [Parameter(Mandatory=$false)]
+	[switch]$Performance = $false, 
+	
+	# This is useful on a Fault History report. Otherwise useless.
+    [Parameter(Mandatory=$false)]
+	[switch]$PingCheck = $false,
+	
+	# Detect SQL servers
+    [Parameter(Mandatory=$false)]
+	[switch]$MSSQL = $false, 
+	
+	# Enable physical disk check if SMART status is available
+    [Parameter(Mandatory=$false)]
+	[switch]$SMART = $false, 
+	
+	# Configure a basic backup check if a compatible product is recognized
+    [Parameter(Mandatory=$false)]
+	[switch]$Backup = $false, 
+	
+	# Configure an Antivirus check if a compatible product is recognized
+    [Parameter(Mandatory=$false)]
+	[switch]$Antivirus = $false, 
+	
+	# Configure default log checks
+    [Parameter(Mandatory=$false)]
+	[switch]$LogChecks = $false, 
+	
+	# Freespace as number+unit, i.e 10%, 5GB or 500MB
+    [Parameter(Mandatory=$false)]
+	[ValidatePattern('\d+(%|MB|GB)$')]
+	[string]$DriveSpaceCheck = $null, 
+	
+	 # "All" or "DefaultOnly". 
+	[Parameter(Mandatory=$false)]
+    [ValidateSet("All", "Default")]
+	[string]$WinServiceCheck = "",
+	
+	# percentage as integer
+	[Parameter(Mandatory=$false)]
+    [ValidateScript({$_ -ge 1 -and $_ -le 100})]
+	[int]$DiskSpaceChange, 
+
+	# 5 or 15 minutes
+	[Parameter(Mandatory=$false)]
+    [ValidateSet("5", "15")]
+	[string]$ServerInterval = "5", 
+
+	# 30 or 60 minutes
+	[Parameter(Mandatory=$false)]
+    [ValidateSet("30", "60")]
+	[string]$PCInterval = "30", 
+
+	# When DSC check should run in whole hours. Minutes not supported by agent.
+	[Parameter(Mandatory=$false)]
+    [ValidateScript({$_ -ge 0 -and $_ -le 23})]
+	[string]$DSCHour = "8", 
+	
+	# Used to source this script for its functions
+    [Parameter(Mandatory=$false)]
+	[switch]$Library = $false 
+)
+
+Set-StrictMode -Version 2
 
 ## VARIUS FUNCTIONS
 # 
-function New-MAXfocusCheck ([string]$checktype, 
-							[string]$option1,
-							[string]$option2,
-							[string]$option3,
-							[string]$option4,
-							[string]$option5,
-							[string]$option6) {
+function New-MAXfocusCheck (
+	[string]$checktype, 
+	[string]$option1,
+	[string]$option2,
+	[string]$option3,
+	[string]$option4,
+	[string]$option5,
+	[string]$option6) {
+	
 	Switch ($checktype) {
 		"DriveSpaceCheck" {
-			$object = "" | Select checktype,checkset,driveletter,freespace,spaceunits
-			$object.checktype = $checktype
-			$object.checkset = "247"
+			$object = "" | Select driveletter,freespace,spaceunits
+			$checkset = "247"
 			$object.driveletter = $option1
 			$object.freespace = $FreeSpace
 			$object.spaceunits = $SpaceUnits
 		}
 		"DiskSpaceChange" {
-			$object = "" | Select checktype,checkset,driveletter,threshold
-			$object.checktype = $checktype
-			$object.checkset = "DSC"
+			$object = "" | Select driveletter,threshold
+			$checkset = "DSC"
 			$object.driveletter = $option1
 			$object.threshold = $DiskSpaceChange
 		}
 		"WinServiceCheck" {
-			$object = "" | Select checktype,checkset,servicename,servicekeyname,failcount,startpendingok,restart,consecutiverestartcount,cumulativerestartcount
-			$object.checktype = $checktype
-			$object.checkset = "247"
+			$object = "" | Select servicename,servicekeyname,failcount,startpendingok,restart,consecutiverestartcount,cumulativerestartcount
+			$checkset = "247"
 			$object.servicename = $option1
 			$object.servicekeyname = $option2
 			$object.failcount = 1 # How many consecutive failures before check fails
@@ -132,10 +146,9 @@ function New-MAXfocusCheck ([string]$checktype,
 			$object.consecutiverestartcount = 2 # ConsecutiveRestartCount = 2 (Fail if service doesnt run after 2 tries)
 			$object.cumulativerestartcount = "4|24"  # Cumulative Restart Count = 4 in 24 hours
 		}
-		"PerCounterCheck" {
-			$object = "" | Select checktype,checkset,type,instance,threshold1,threshold2,threshold3,threshold4
-			$object.checktype = $checktype
-			$object.checkset = "247"
+		"PerfCounterCheck" {
+			$object = "" | Select type,instance,threshold1,threshold2,threshold3,threshold4
+			$checkset = "247"
 			Switch ($option1) {
 				"Queue" {
 					$object.type = 1
@@ -177,24 +190,22 @@ function New-MAXfocusCheck ([string]$checktype,
 						$object.threshold1 = $option3  # Read queue
 						$object.threshold2 = $option3  # Write queue
 					} Else {
-						$object.threshold1 = 2  # Read queue
-						$object.threshold2 = 2  # Write queue
+						$object.threshold1 = 4  # Read queue
+						$object.threshold2 = 4  # Write queue
 					}
 					$object.threshold3 = 100 # Disk time, and again we are talking ALERTS
 				}
 			}
 		}
 		"PingCheck" {
-			$object = "" | Select checktype,checkset,name,pinghost,failcount
-			$object.checktype = $checktype
-			$object.checkset = "247"
+			$object = "" | Select name,pinghost,failcount
+			$checkset = "247"
 			$object.name = $option1
 			$object.pinghost = $option2
 		}
 		"BackupCheck" {
-			$object = "" | Select checktype,checkset,BackupProduct,checkdays,partial,count
-			$object.checktype = $checktype
-			$object.checkset = "DSC"
+			$object = "" | Select BackupProduct,checkdays,partial,count
+			$checkset = "DSC"
 			$object.backupproduct = $option1
 			$object.checkdays = "MTWTFSS"
 			$object.partial = 0
@@ -205,16 +216,14 @@ function New-MAXfocusCheck ([string]$checktype,
 			}
 		}
 		"AVUpdateCheck" {
-			$object = "" | Select checktype,checkset,AVProduct,checkdays
-			$object.checktype = $checktype
-			$object.checkset = "DSC"
+			$object = "" | Select AVProduct,checkdays
+			$checkset = "DSC"
 			$object.avproduct = $option1
 			$object.checkdays = "MTWTFSS"
 		}
 		"CriticalEvents" {
-			$object = "" | Select checktype,checkset,eventlog,mode,option
-			$object.checktype = $checktype
-			$object.checkset = "DSC"
+			$object = "" | Select eventlog,mode,option
+			$checkset = "DSC"
 			$object.eventlog = $option1
 			If ($option2) {
 				$object.mode = $option2
@@ -224,9 +233,8 @@ function New-MAXfocusCheck ([string]$checktype,
 			$object.option = 0
 	  	}
 		"EventLogCheck" {
-			$object = "" | Select checktype,checkset,uid,log,flags,ids,source,contains,exclude,ignoreexclusions
-			$object.checktype = $checktype
-			$object.checkset = "DSC"
+			$object = "" | Select uid,log,flags,ids,source,contains,exclude,ignoreexclusions
+			$checkset = "DSC"
 			$object.uid = $option1
 			$object.log = $option2
 			$object.flags = $option3
@@ -241,9 +249,8 @@ function New-MAXfocusCheck ([string]$checktype,
 			$object.ignoreexclusions = "false"
 	   }
 	   "VulnerabilityCheck" {
-	   		$object = "" | Select checktype,checkset,schedule1,schedule2,devtype,mode,autoapproval,scandelaytime,failureemails,rebootdevice,rebootcriteria
-			$object.checktype = $checktype
-			$object.checkset = "DSC"
+	   		$object = "" | Select schedule1,schedule2,devtype,mode,autoapproval,scandelaytime,failureemails,rebootdevice,rebootcriteria
+			$checkset = "DSC"
 			$object.schedule1 = ""
 			$object.schedule2 = "2|0|{0}|0|{1}|0" -f $option1, $option2
 			If ($AgentMode -eq "Server") {
@@ -258,139 +265,95 @@ function New-MAXfocusCheck ([string]$checktype,
 			$object.rebootdevice = 0
 			$object.rebootcriteria = "0|1"
 	   }
+       "PhysDiskCheck" {
+            $object = "" | Select volcheck
+			$checkset = "DSC"
+			$object.volcheck = 1
+       }
 	}
-	Return $object
-}
+	
+	$XmlCheck = $XmlConfig[$checkset].CreateElement($checktype)
+	
+	# Modified and uid are attributes, not properties. Do not set uid for new checks.
+	# Let the agent deal with that. 
+	$XmlCheck.SetAttribute('modified', '1')
 
-function Convert-MAXfocusXmlToObject ([System.Xml.XmlElement]$xmlCheck) {
-	$FilePath =  $xmlCheck.BaseURI -replace "file:///", ""
-	$Set = (Split-Path $FilePath -Leaf).Substring(0,3)
-	If ($Set -eq "ST_") {$Set = "ST"}
-	$object = "" | Select checktype,checkset
-	$object.checktype = $xmlCheck.LocalName;
-	$object.checkset = $Set
-	ForEach ($Node in $xmlCheck.ChildNodes) {
-		$object | Add-Member -MemberType NoteProperty -Name $Node.Name -Value $Node.InnerText
-	}
-	Return $object
-}
-
-function Convert-MAXfocusObjectToXml ([System.Object]$object, $uid) {
-	$xmlCheck = $XmlConfig[$object.checkset].CreateElement($object.checktype)
-	$xmlCheck.SetAttribute('modified', '1')
-	$xmlCheck.SetAttribute('uid', $uid)
-		
 	Foreach ($property in $object|Get-Member -MemberType NoteProperty) {
-		 If ("checkset", "checktype" -notcontains $property.Name) {
-			$xmlProperty = $XmlConfig[$object.checkset].CreateElement($property.Name)
-			$propertyValue = $object.($property.Name)
-			# Is this a number?
-			If ([bool]($propertyValue -as [int]) -or $propertyValue -eq "0") { 
-				# If its a number we just dump it in there
-				$xmlProperty.set_InnerText($propertyValue)
-			} Else { 
-				# If it is text we encode it in CDATA
-				$rs = $xmlProperty.AppendChild($XmlConfig[$object.checkset].CreateCDataSection($propertyValue))
+		$xmlProperty = $XmlConfig[$checkset].CreateElement($property.Name)
+		$propertyValue = $object.($property.Name)
+		# Is this a number?
+		If ([bool]($propertyValue -as [int]) -or $propertyValue -eq "0") { 
+			# If its a number we just dump it in there
+			$xmlProperty.set_InnerText($propertyValue)
+		} ElseIf ($propertyValue) { 
+			# If it is text we encode it in CDATA
+			$rs = $xmlProperty.AppendChild($XmlConfig[$checkset].CreateCDataSection($propertyValue))
+		}
+		# Add Property to Check element
+		$rs = $xmlCheck.AppendChild($xmlProperty)
+	}
+	$rs = $XmlConfig[$checkset].checks.AppendChild($XmlCheck)
+	$Script:NewChecks += $XmlCheck
+	$Script:ConfigChanged = $true
+
+}
+
+function Get-XmlPropertyValue ($xmlProperty) {
+	If ($XmlProperty -is [System.Xml.XmlElement]) {
+		Return $XmlProperty.InnerText
+	} Else {
+		Return $XmlProperty
+	}
+}
+
+
+function Get-MAXfocusCheckList ([string]$checktype, [string]$property, [string]$value, [bool]$ExactMatch = $true ) {
+	$return = @()
+	$ChecksToFilter = @()
+	$ChecksToFilter = $XmlConfig.Values | % {$_.SelectNodes("//{0}" -f $checktype)}
+	If (!($ChecksToFilter)) { Return }
+	If ($value) {
+		Foreach ($XmlCheck in $ChecksToFilter) {
+			$XmlValue = Get-XmlPropertyValue $XmlCheck.$property
+			If ($ExactMatch) { 
+				If ($XmlValue -eq $value) { $return += $XmlCheck }
+			} Else {
+				If ($XmlValue -match $value) { $return += $XmlCheck }
 			}
-			# Add Property to Check element
-			$rs = $xmlCheck.AppendChild($xmlProperty)
 		}
-	}
-	Return $xmlCheck
-}
-
-function Convert-MAXfocusChecksToObjects ([array]$xmlChecks) {
-	$objects = @{}
-	ForEach ($xmlCheck in $xmlChecks) {
-		If ($xmlCheck.uid -is [System.Array]) {
-			$uid = $xmlCheck.uid[0]
-		} Else {
-			$uid= $xmlCheck.uid
-		}
-		$objects[$uid] = Convert-MAXfocusXmlToObject $xmlCheck
-	}
-	Return $objects
-}
-
-function Convert-MAXfocusObjectsToChecks ([hashtable]$objects) {
-	ForEach ($object in $objects.GetEnumerator()) {
-		$xmlCheck = Convert-MAXfocusObjectToXml $object.Value $object.Name
-		# Add Check to file in check section
-		$rs = $XmlConfig[$object.Value.checkset].checks.AppendChild($xmlCheck)
-	}
-}
-
-function Get-MAXfocusChecks ([string]$checktype, [string]$property, [string]$value) {
-	$return = @{}
-	Foreach ($object in $objConfig.GetEnumerator()) {
-		If ($object.Value.checktype -ne $checktype) { Continue }
-		If ($value) {
-			If ($object.Value.$property -eq $value) { $return[$object.Key]  = $object.Value }
-		} Else {
-			$return[$object.Key]  = $object.Value
-		}
+	} Else {
+		Return $ChecksToFilter
 	}
 	Return $return
 }
 
-function Remove-MAXfocusChecks ([hashtable]$ChecksToRemove) {
+function Remove-MAXfocusChecks ([array]$ChecksToRemove) {
 	If (!($ChecksToRemove.Count -gt 0)) { Return }
-	ForEach ($object in $ChecksToRemove.GetEnumerator()) {
-		$objConfig.Remove($object.Key)
-		$RemoveChecks[$object.Key] = $object.Value
+	ForEach ($XmlCheck in $ChecksToRemove) {
+		$XmlCheck.ParentNode.RemoveChild($XmlCheck)
+		$Script:RemoveChecks += $XmlCheck
 	}
-	$Global:ConfigChanged = $true
+	$Script:ConfigChanged = $true
 }
 
-function Get-MAXfocusCheckUid ([PSObject]$Check) {
-	$Checks = Get-MAXfocusChecks $Check.checktype
-	Foreach ($object in $Checks.GetEnumerator()) {
-		$Match = $true
-		Foreach ($property in $Check.PSObject.properties) {
-			$name = $property.Name
-			If  ($name -eq "uid") { Continue }
-			$value = $property.Value
-			If ($object.Value.$name -ne $value) { 
+function Get-MAXfocusCheck ([System.Xml.XmlElement]$XmlCheck) {
+	$ChecksToFilter = @()
+	$ChecksToFilter = Get-MAXfocusCheckList $XmlCheck.LocalName
+	If ($ChecksToFilter.Count -eq 0) { Return $false }
+	Foreach ($ExistingCheck in $ChecksToFilter) {
+		$Match = $True
+		Foreach ($ChildNode in $XmlCheck.ChildNodes) {
+			If ($ChildNode.LocalName -eq "uid") { Continue }
+			$property = $ChildNode.LocalName
+			$ExistingValue = Get-XmlPropertyValue $ExistingCheck.$property
+			If ($ChildNode.Innertext -ne $ExistingValue) {
 				$Match = $false
-				Continue
+				Break
+			}
+			If ($Match) {
+				Return $ExistingCheck
 			}
 		}
-		If ($Match) {		
-			Return $object.Key
-		}
-	}
-	Return $false
-}
-
-function Exist-MAXfocusCheck ([PSObject]$Check) {
-	$result = Get-MAXfocusCheckUid $Check
-	If ($result) {
-		Return $true
-	} Else {
-		Return $false
-	}
-}
-
-function Add-MAXfocusCheck ([PSObject]$Check, [HashTable]$oldChecks, [int]$checkuid) {
-	If (!($checkuid)) {
-		$checkuid = $Global:uid
-	}
-	If ($oldChecks.Count -gt 0) {
-		If ($Replace) {
-			$olduid = Get-MAXfocusCheckUid $Check
-			If ($olduid) {
-				$oldChecks.Remove($olduid)
-			}
-			Remove-MAXfocusChecks $oldChecks
-		} Else {
-			Return
-		}
-	}
-	If (!(Exist-MAXfocusCheck $Check)) {
-		$objConfig[$checkuid] = $Check
-		$NewChecks[$checkuid] = $Check
-		$Global:ConfigChanged = $true
-		If ($checkuid -eq $Global:uid) { $Global:uid++ }
 	}
 }
 
@@ -451,38 +414,37 @@ function Out-IniFile($InputObject, $FilePath) {
 }
 
 # Small function to give missing checks output some structure
-function Format-Output($CheckTable) {
+function Format-Output($ArrayOfChecks) {
 	$Result = @()
-	Foreach ($Check in $CheckTable.GetEnumerator()){
-		$CheckItem = $Check.Value
-		Switch ($CheckItem.checktype)	{
+	Foreach ($CheckItem in $ArrayOfChecks){
+		Switch ($CheckItem.LocalName)	{
 			{"DriveSpaceCheck","DiskSpaceChange" -contains $_ } {
-				$Result += $CheckItem.checktype + " " + $CheckItem.driveletter }
+				$Result += $CheckItem.LocalName + " " + $CheckItem.driveletter.InnerText }
 			"WinServicecheck" {
-				$Result += $CheckItem.checktype + " " + $CheckItem.servicename }
+				$Result += $CheckItem.LocalName + " " + $CheckItem.servicename.InnerText }
 			"PerfCounterCheck" { 
 				Switch ($CheckItem.type) {
-					"1" { $Result += $CheckItem.checktype + " Processor Queue Length"}
-					"2" { $Result += $CheckItem.checktype + " Average CPU Usage"}
-					"3" { $Result += $CheckItem.checktype + " Memory Usage"}
-					"4" { $Result += $CheckItem.checktype + " Network Interface " + $CheckItem.instance}
-					"5" { $Result += $CheckItem.checktype + " Physical Disk " + $CheckItem.instance}
+					"1" { $Result += $CheckItem.LocalName + " Processor Queue Length"}
+					"2" { $Result += $CheckItem.LocalName + " Average CPU Usage"}
+					"3" { $Result += $CheckItem.LocalName + " Memory Usage"}
+					"4" { $Result += $CheckItem.LocalName + " Network Interface " + $CheckItem.instance.InnerText}
+					"5" { $Result += $CheckItem.LocalName + " Physical Disk " + $CheckItem.instance.InnerText}
 				}}
-			{"PingCheck","AVUpdateCheck","BackupCheck","FileSizeCheck" -contains $_ } {
-				$Result += $CheckItem.checktype + " " + $CheckItem.name }
+			{"PingCheck","AVUpdateCheck","BackupCheck","FileSizeCheck" -contains $CheckItem.LocalName } {
+				$Result += $CheckItem.LocalName + " " + $CheckItem.name.InnerText }
 			"EventLogCheck" {
-				$Result += $CheckItem.checktype + " " + $CheckItem.log }
+				$Result += $CheckItem.LocalName + " " + $CheckItem.log.InnerText }
 			"CriticalEvents" {
 				switch ($CheckItem.mode) { 
-					0 { $Result += $CheckItem.checktype + " " + $CheckItem.eventlog + " (Report)" }
-					1 { $Result += $CheckItem.checktype + " " + $CheckItem.eventlog + " (Alert)" }}}
+					0 { $Result += $CheckItem.LocalName + " " + $CheckItem.eventlog.InnerText + " (Report)" }
+					1 { $Result += $CheckItem.LocalName + " " + $CheckItem.eventlog.InnerText + " (Alert)" }}}
 			default { 
-				$Result += $CheckItem.checktype }
+				$Result += $CheckItem.LocalName }
 
 		}
 		
 	}
-	$result += "" # Add blank line
+	$Result += "" # Add blank line
 	$Result
 }
 
@@ -615,6 +577,82 @@ function Get-TMScanType {
 	}
 }
 
+Function Is-SMARTavailable () {
+    $PrevErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Stop'
+    Try {
+        $Result = Get-WmiObject MSStorageDriver_FailurePredictStatus -Namespace root\wmi
+    } Catch {
+        $ErrorActionPreference = $PrevErrorAction
+        Return $False
+    }
+    $ErrorActionPreference = $PrevErrorAction
+    Return $True
+}
+
+## Exit if sourced as Library
+If ($Library) { Exit 0 }
+
+# Force the script to output something to STDOUT, else errors may cause script timeout.
+Write-Host " "
+
+If ($All)
+{
+	## DEFAULT CHECKS
+	$Performance = $true # Set to $false if you do not want performance checks
+	$PingCheck = $false # This is useful on a Fault History report. Otherwise useless.
+	$MSSQL = $true # Detect SQL servers
+	$SMART = $true # Enable physical disk check if SMART status is available
+	$Antivirus = $true # Configure an Antivirus check if a compatible product is recognized
+	$DriveSpaceCheck = "10%" # Freespace as number+unit, i.e 10%, 5GB or 500MB
+	$WinServiceCheck = "All" # "All" or "Default". 
+	$DiskSpaceChange = 10 # percentage as integer
+	$Backup = $true # Try to configure Backup Monitoring
+	$LogChecks = $true # Configure default eventlog checks
+	$ReportMode = $true
+}
+
+$DefaultLogChecks = @(
+	@{ "log" = "Application|Application Hangs"; # Application log | Human readable name
+	   "flags" = 32512;
+	   "ids" = "*";
+	   "source" = "Application Hang" }
+	@{ "log" = "System|NTFS Errors";
+	   "flags" = 32513;
+	   "ids" = "*";
+	   "source" = "Ntfs*" }
+	@{ "log" = "System|BSOD Stop Errors";
+	   "flags" = 32513;
+	   "ids" = "1003";
+	   "source" = "System" }
+)	   
+
+$DefaultCriticalEvents = @(
+	@{ "eventlog" = "Directory Service";
+	   "mode" = 1 }
+	@{ "eventlog" = "File Replication Service";
+	   "mode" = 1 }
+	@{ "eventlog" = "HardwareEvents";
+	   "mode" = 1 }
+	@{ "eventlog" = "System";
+	   "mode" = 0 }
+	@{ "eventlog" = "Application";
+	   "mode" = 0 }
+)
+
+$DoNotMonitorServices = @( # Services you do not wish to monitor, regardless
+	"wuauserv", # Windows Update Service. Does not run continously.
+	"gupdate", "gupdatem", # Google Update Services. Does not always run.
+	"AdobeARMservice", # Another service you may not want to monitor
+	"Windows Agent Maintenance Service", # Clean up after N-Able
+	"Windows Agent Service",
+	"RSMWebServer"
+)
+$AlwaysMonitorServices = @( # Services that always are to be monitored if present and autorun
+	"wecsvc" # Windows Event Collector
+)
+	
+
 ## SETUP ENVIRONMENT
 # Find "Advanced Monitoring Agent" service and use path to locate files
 $gfimaxagent = Get-WmiObject Win32_Service | Where-Object { $_.Name -eq 'Advanced Monitoring Agent' }
@@ -623,7 +661,6 @@ $gfimaxpath = Split-Path $gfimaxagent.PathName.Replace('"',"") -Parent
 
 # XML Document objects
 $XmlConfig = @{}
-$objConfig = @{}
 $AgentConfig = New-Object -TypeName XML
 $DeviceConfig = New-Object -TypeName XML
 
@@ -635,8 +672,14 @@ $LastChangeFile = $gfimaxpath + "\LastChange.log"
 
 # We need an array of hashes to remember which checks to add
 $NewChecks = @()
+$RemoveChecks = @()
+$oldChecks = @()
 
+# The prefix to the config files we need to read
 $Sets = @("247", "DSC")
+
+# An internal counter for new checks since we store them in a hashtable
+[int]$uid = 1
 
 $IniFile = $gfimaxpath + "\settings.ini"
 $ConfigChanged = $false
@@ -645,6 +688,7 @@ $settingsChanged = $false
 # Read ini-files
 $settingsContent = Get-IniContent($IniFile)
 $servicesContent = Get-IniContent($gfimaxpath + "\services.ini")
+
 
 # First of all, check if it is safe to make any changes
 If ($Apply) {
@@ -661,71 +705,44 @@ If ($Apply) {
 		}
 	}
 	If (!($Apply)) {
-		Write-Host "Changes Applied:"
+		Write-Host "Changes Applied."
+		If (Test-Path $LastChangeFile) {
+			# Print last change to STDOUT
+			Write-Host "------------------------------------------------------"
+			Get-Content $LastChangeFile
+			Write-Host "------------------------------------------------------"
+		}
+	Exit 0 # SUCCESS
 	}
 }
 
 
-# Read configuration of checks. Create an XML object if they do not exist yet.
-$MaxUid = @()
-ForEach ($Set in $Sets + "ST") {
+ForEach ($Set in $Sets) {
 	$XmlConfig[$Set]  = New-Object -TypeName XML
 	$XmlFile[$Set] = $gfimaxpath + "\{0}_Config.xml" -f $Set
-	If (Test-Path $XmlFile[$Set]) { 
+	If  (Test-Path $XmlFile[$Set]) { 
 		$XmlConfig[$Set].Load($XmlFile[$Set])
 		$XmlConfig[$Set].DocumentElement.SetAttribute("modified","1")
-		$objConfig += Convert-MAXfocusChecksToObjects @($XmlConfig[$Set].checks.ChildNodes)
+	} Else {
+		# File does not exist. Create a new, emtpy XML document
+		$XmlConfig[$Set]  = New-Object -TypeName XML
+		$decl = $XmlConfig[$Set].CreateXmlDeclaration("1.0", "ISO-8859-1", $null)
+		$rootNode = $XmlConfig[$Set].CreateElement("checks")
+		$result = $XmlConfig[$Set].InsertBefore($decl, $XmlConfig[$Set].DocumentElement)
+		$result = $XmlConfig[$Set].AppendChild($rootNode)
+		
+		# Mark checks as modified. We will onøy write this to disk if we have modified anything
+		$result = $rootNode.SetAttribute("modified", "1")
 	}
-	$XmlConfig[$Set]  = New-Object -TypeName XML
-	$decl = $XmlConfig[$Set].CreateXmlDeclaration("1.0", "ISO-8859-1", $null)
-	$rootNode = $XmlConfig[$Set].CreateElement("checks")
-	$result = $rootNode.SetAttribute("modified", "1")
-	$result = $XmlConfig[$Set].InsertBefore($decl, $XmlConfig[$Set].DocumentElement)
-	$result = $XmlConfig[$Set].AppendChild($rootNode)
-	
-}
 
-$MaxUid = $objConfig.Keys | Measure -Maximum
-$InUseUid = $MaxUid.Maximum + 1
+} 
 
-# Get next available UID from INI file
-# $uid = [int]$settingsContent["GENERAL"]["NEXTCHECKUID"]
-# Ini file cannot be trusted if script checks are being used
-$SettingsUid = $settingsContent["GENERAL"]["NEXTCHECKUID"]
-
-If($SettingsUid -gt $InUseUid) {
-	[int]$uid = $SettingsUid
-} Else {
-	[int]$uid = $InUseUid
-}
-
-If ($ReUid) {
-	# So, we have messed up your configuration files? We will try to fix them...
-	$NewObjConfig = @{}
-	ForEach ($key in $objConfig.Keys) {
-		$NewObjConfig[$uid] = $objConfig[$key]
-		$uid++
-	}
-	$objConfig = $NewObjConfig
-}
 
 # Read agent config
 $AgentConfig.Load($AgentFile)
 
 # Read autodetected machine info
 $DeviceConfig.Load($DeviceFile)
-
-
-# The UID problems caused trouble with web protection check. But it can be fixed.
-#$WebProtection = @($XmlConfig[$Set].checks.wpcategorycounternotificationcheck)
-#If ($WebProtection.Count -gt 1)
-#{
-#	$MinUid = (Get-GFIMAXChecks ($WebProtection | select uid) "uid" | Measure -Minimum).minimum
-#	$WrongCheck = $XmlConfig[$Set].checks.SelectSingleNode("wpcategorycounternotificationcheck[@uid=$MinUid]")
-#	$null = $XmlConfig[$Set].checks.RemoveChild($WrongCheck)
-#	$ConfigChanged = $true
-#}
-
 
 # Check Agent mode, workstation or server
 $AgentMode = $AgentConfig.agentconfiguration.agentmode
@@ -760,10 +777,6 @@ If ($settingsContent["DAILYSAFETYCHECK"]["HOUR"] -ne $DSCHour) {
 }
 
 
-# We need a hashtable to remember which checks to add
-$NewChecks = @{}
-$RemoveChecks = @{}
-
 # Check for new services that we'd like to monitor'
 
 ## DRIVESPACECHECK
@@ -790,9 +803,18 @@ If ($DriveSpaceCheck) {
 			Continue
 		}
 		$DriveLetter = $Disk + "\"
-		$NewCheck = New-MAXfocusCheck "DriveSpaceCheck" $DriveLetter
-		$oldChecks = Get-MAXfocusChecks "DriveSpaceCheck" "driveletter" $DriveLetter
-		Add-MAXfocusCheck $NewCheck $oldChecks
+		$oldChecks = Get-MAXfocusCheckList DriveSpaceCheck driveletter $DriveLetter
+		If (!($oldChecks)) {
+			New-MAXfocusCheck DriveSpaceCheck $DriveLetter
+		}
+	}
+}
+
+## Disk Health Status
+If (($SMART) -and (Is-SMARTavailable)) {
+    $oldChecks = Get-MAXfocusCheckList PhysDiskCheck
+	If (!($oldChecks)) {
+		New-MAXfocusCheck PhysDiskCheck
 	}
 }
 
@@ -807,9 +829,10 @@ If (($DiskSpaceChange) -and ($AgentMode -eq "server")) {
 	# Add any disk not currently in CurrentDiskSpaceChecks
 	foreach ($Disk in $DetectedDrives) {
 		$DriveLetter = $Disk + "\"
-		$NewCheck = New-MAXfocusCheck "DiskSpaceChange" $DriveLetter
-		$oldChecks = Get-MAXfocusChecks "DiskSpaceChange" "driveletter" $DriveLetter
-		Add-MAXfocusCheck $NewCheck $oldChecks
+		$oldChecks = Get-MAXfocusCheckList DiskSpaceChange driveletter $DriveLetter
+		If (!($oldChecks)) {
+			New-MAXfocusCheck DiskSpaceChange $DriveLetter
+		}
 	}
 }
 
@@ -819,8 +842,10 @@ If (($DiskSpaceChange) -and ($AgentMode -eq "server")) {
 If (("All", "Default" -contains $WinServiceCheck) -and ($AgentMode -eq "server")) {
 	# We really dont want to keep annoying services in our setup
 	Foreach ($service in $DoNotMonitorServices) {
-		$oldChecks = Get-MAXfocusChecks "WinServiceCheck" "servicekeyname" $service
-		Remove-MAXfocusChecks $oldChecks
+		$oldChecks = Get-MAXfocusCheckList WinServiceCheck servicekeyname $service
+		If ($oldChecks) {
+			Remove-MAXfocusChecks $oldChecks
+		}
 	}
 	# An array to store names of services to monitor
 	$ServicesToMonitor = @()
@@ -861,9 +886,10 @@ If (("All", "Default" -contains $WinServiceCheck) -and ($AgentMode -eq "server")
 	## SERVICES TO ADD
 	Foreach ($service in $ServicesToMonitor) {
 		If ($DoNotMonitorServices -notcontains $service.Name) {
-			$NewCheck = New-MAXfocusCheck "WinServiceCheck" $service.DisplayName $service.Name
-			$oldChecks = Get-MAXfocusChecks "WinServiceCheck" "servicekeyname" $service.Name
-			Add-MAXfocusCheck $NewCheck $oldChecks
+			$oldChecks = Get-MAXfocusCheckList WinServiceCheck servicekeyname $service.Name
+			If (!($oldChecks)) {
+				New-MAXfocusCheck WinServiceCheck $service.DisplayName $service.Name
+			}
 		}
 	}
 
@@ -880,50 +906,11 @@ If ($MSSQL) {
 		#[System.Reflection.Assembly]::LoadWithPartialName('Microsoft.SqlServer.SMO') | out-null 
 	
 		Foreach ($Instance in $SqlInstances){
-			$sqlService = Get-WmiObject Win32_Service | where { $_.DisplayName -match $instance.SQLInstance -and $_.PathName -match "sqlservr.exe"}
-			$NewCheck = New-MAXfocusCheck "WinServiceCheck" $sqlService.DisplayName $sqlService.Name
-			$oldChecks = Get-MAXfocusChecks "WinServiceCheck" "servicekeyname" $sqlService.Name
-			Add-MAXfocusCheck $NewCheck $oldChecks
-		
-	
-		# Create a managment handle for this instance
-#		$sqlhandle = New-Object ('Microsoft.SqlServer.Management.Smo.Server') $Instance.FullName
-#		Try {
-#			# Retrieve any databases on instance
-#			$dbs = $sqlhandle.Databases 
-#			Foreach ($db in $dbs) {
-#				# Loop through logfiles and retain directory
-#				$locations = @()
-#				$logfiles = $db.LogFiles | select -ExpandProperty Filename
-#				If ($logfile.Count -gt 0) {
-#					Foreach ($logfile in $logfiles) {
-#						$parent = Split-Path -Parent $logfile
-#						If ($locations -notcontains $parent) { $locations += $parent }
-#					}
-#					Foreach ($location in $locations) {
-#						If (!($CurrentFileSizeChecks -Contains "0|" + $location + "|*.ldf")) {
-#								$NewChecks += @{	"checktype" = "FileSizeCheck";
-#									"checkset" = $Set;
-#									"Name" = $instance;
-#									"Threshold" = "5"; "Units" = "3|0";
-#										# Units: 0 = Bytes, 1 = KBytes, 2 = MBytes, 3 = GBytes
-#										# Units, element 2: 0 = Greater Than, 1 = Less Than
-#									"Include" = "0|" + $location + "|*.ldf";
-#										# First element: 1 = Include subfolders, 0 = This folder only
-#										# Second element: Folder where files are located
-#										# Third element: File pattern
-#									"Exclude" = "" }# Same syntax as Include 
-#						}
-#					}
-#				}
-#				# Retrive RecoveryModel and save name if it isn't Simple
-#				If ($db.RecoveryModel -ne "Simple") {
-#					$Instance.FullRecoveryModel += $db.Name + " "
-#				}
-#			}
-#		} Catch {
-#			Write-Host ("SQL Server Detection: Access to {0} Failed" -F $Instance.FullName)
-#		}
+			$sqlService = Get-WmiObject Win32_Service | where { $_.DisplayName -match $instance.SQLInstance -and $_.PathName -match "sqlservr.exe" -and $_.StartMode -eq 'Auto'}
+			$oldChecks = Get-MAXfocusCheckList WinServiceCheck servicekeyname $sqlService.Name
+			If (!($oldChecks)) {
+				New-MAXfocusCheck WinServiceCheck $sqlService.DisplayName $sqlService.Name
+			}
 		}
 	}
 }
@@ -934,48 +921,52 @@ If ($Performance -and ($AgentMode -eq "server")) { # Performance monitoring is o
 	$ThisDevice = Get-WmiObject Win32_ComputerSystem
 	
 	## Processor Queue
-	If ($ThisDevice.Model -match "^virtual|^vmware") {
-		# We are on a virtual machine
-		$NewCheck = New-MAXfocusCheck "PerfCounterCheck" "Queue" "10"
-	} Else {
-		$NewCheck = New-MAXfocusCheck "PerfCounterCheck" "Queue"
+	If ($ThisDevice.Model -notmatch "^virtual|^vmware") {
+		# We are on a physical machine
+		$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 1
+		If (!($oldChecks)) {
+			New-MAXfocusCheck PerfCounterCheck Queue
+		}
 	}
-	$oldChecks = Get-MAXfocusChecks "PerfCounterCheck" "type" 1
-	Add-MAXfocusCheck $NewCheck $oldChecks
 	
 	## CPU
-	$NewCheck = New-MAXfocusCheck "PerfCounterCheck" "CPU"
-	$oldChecks = Get-MAXfocusChecks "PerfCounterCheck" "type" 2
-	Add-MAXfocusCheck $NewCheck $oldChecks
+	$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 2
+	If (!($oldChecks)) {
+		New-MAXfocusCheck PerfCounterCheck CPU
+	}
 	
 	## RAM
 	[int]$nonpagedpool = 128
 	If ([System.IntPtr]::Size -gt 4) { # 64-bit
-		[int]$TotalMemoryInGB = $ThisDevice.TotalPhysicalMemory /(1024*1024)
-		[int]$nonpagedpool = $nonpagedpool/1024*$TotalMemoryInGB
+		[int]$TotalMemoryInMB = $ThisDevice.TotalPhysicalMemory / 1MB
+		[int]$nonpagedpool = $nonpagedpool / 1024 * $TotalMemoryInMB
 	}
-	$NewCheck = New-MAXfocusCheck "PerfCounterCheck" "RAM" $nonpagedpool
-	$oldChecks = Get-MAXfocusChecks "PerfCounterCheck" "type" 2
-	Add-MAXfocusCheck $NewCheck $oldChecks
+
+	$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 2
+	If (!($oldChecks)) {
+		New-MAXfocusCheck PerfCounterCheck RAM $nonpagedpool
+	}
 	
 	## Net
 	#  Not on Hyper-V
 	If ($ThisDevice.Model -notmatch "^virtual") {
-		$NetConnections = $DeviceConfig.configuration.networkadapters | select -ExpandProperty name | where {$_ -notmatch "isatap" -and $_ -notmatch "Teredo"}
-		Foreach ($Adapter in $NetConnections) {
-			$NewCheck = New-MAXfocusCheck "PerfCounterCheck" "Net" $Adapter
-			$oldChecks = Get-MAXfocusChecks "PerfCounterCheck" "instance" $Adapter
-			Add-MAXfocusCheck $NewCheck $oldChecks
+		$NetConnections = Get-WmiObject Win32_PerfRawData_Tcpip_Networkinterface | where {$_.BytesTotalPersec -gt 0} | Select -ExpandProperty Name
+		$oldChecks = Get-MAXfocusCheckList PerfCounterCheck Type 4
+		If (!($oldChecks)) {
+			Foreach ($Adapter in $NetConnections) {
+				New-MAXfocusCheck PerfCounterCheck Net $Adapter
+			}
 		}
 	}
 	## Disk
 	# Needs physical disks
 	$PhysicalDisks =  $DeviceConfig.configuration.physicaldisks | select -ExpandProperty name | where {$_ -ne "_Total"}
 
-	Foreach	($Disk in $PhysicalDisks ) {
-		$NewCheck = New-MAXfocusCheck "PerfCounterCheck" "Disk" $Disk
-		$oldChecks = Get-MAXfocusChecks "PerfCounterCheck" "Type" 5
-		Add-MAXfocusCheck $NewCheck $oldChecks
+	$oldChecks = Get-MAXfocusCheckList PerfCounterCheck Type 5
+	If (!($oldChecks)) {
+		Foreach	($Disk in $PhysicalDisks ) {
+			New-MAXfocusCheck PerfCounterCheck Disk $Disk
+		}
 	}
 }
 
@@ -994,25 +985,28 @@ if($PingCheck -and ($AgentMode -eq "server")) { # Pingcheck only supported on se
 	# If the firewall does not answer to ICMP we wont have an array
 	If ($trace.Count -gt 1)	{ $trace = $trace[1]}
 	If ($trace -is [Net.IPAddress]) {
-		$Newcheck = New-MAXfocusCheck "PingCheck" "Router Next Hop" $trace
-		$oldChecks = Get-MAXfocusChecks "PingCheck" "pinghost" $trace
-		Add-MAXfocusCheck $NewCheck $oldChecks
+		$oldChecks = Get-MAXfocusCheckList PingCheck pinghost $trace
+		If (!($oldChecks)) {
+			New-MAXfocusCheck PingCheck 'Router Next Hop' $trace
+		}
 	}
 	
 }
 
 If ($Backup) {
-	$DetectedBackups = $DeviceConfig.configuration.backups | Select -ExpandProperty name
-	$oldChecks = Get-MAXfocusChecks "BackupCheck"
-	If ($oldChecks.Count -eq 0) {
+	$oldChecks = Get-MAXfocusCheckList BackupCheck
+	If (!($oldChecks)) {
+		$DetectedBackups = $DeviceConfig.configuration.backups | Select -ExpandProperty name -ErrorAction SilentlyContinue
 		Foreach ($BackupProduct in $DetectedBackups){
-			$JobCount = 99
+			$JobCount = 1
+			$AddCheck = $true
 			Switch ($BackupProduct) {
 				"Backup Exec" {
+					$JobCount = 99 # Make sure unconfigured checks fail
 					$bengine =  Get-WmiObject win32_service | where { $_.PathName -match "bengine.exe" -and $_.DisplayName -match "Backup Exec"}
 					If (!($bengine)){
 						# Only add backup exec check if job engine is present
-						Continue
+						 $AddCheck = $false
 					}
 				}
 				"Managed Online Backup" {
@@ -1040,34 +1034,40 @@ If ($Backup) {
 				}
 				Default {
 					# Don't add any checks
-					Continue
+					 $AddCheck = $false
 				}
 			}
-			# We cannot know how many jobs or which days. Better a 
-			# failed check that someone investigates than no check at all
-			$NewCheck = New-MAXfocusCheck "BackupCheck" $BackupProduct $JobCount
-			Add-MAXfocusCheck $NewCheck
-								
+			If ($AddCheck) { 
+				# We cannot know how many jobs or which days. Better a 
+				# failed check that someone investigates than no check at all
+				New-MAXfocusCheck BackupCheck $BackupProduct $JobCount
+			}
 		}
 	}
 }
 
 If ($Antivirus) {
-	$DetectedAntiviruses =  $DeviceConfig.configuration.antiviruses | Select -ExpandProperty name
-	$oldChecks = Get-MAXfocusChecks "AVUpdateCheck"
-	If ($oldChecks.Count -eq 0) {
-		Foreach ($AVProduct in $DetectedAntiviruses) {
-			Switch -regex ($AVProduct) {
-				'Windows Defender' { Continue }
-				'Trend.+Conventional Scan' {
-					If (Get-TMScanType -ne "Smart") { Continue }	
+	$oldChecks = Get-MAXfocusCheckList AVUpdateCheck
+	If (!($oldChecks)) {
+		$DetectedAntiviruses = $DeviceConfig.configuration.antiviruses | Select -ExpandProperty name -ErrorAction SilentlyContinue
+		If (($DetectedAntiviruses) -and ($DetectedAntiviruses -notcontains "Managed Antivirus")) {
+			Foreach ($AVProduct in $DetectedAntiviruses) {
+				$AddCheck = $true
+				Switch -regex ($AVProduct) {
+					'Windows Defender' { $AddCheck = $false }
+					'Trend.+Conventional Scan' {
+						If (Get-TMScanType -ne "Conventional") { $AddCheck = $false }	
+					}
+					'Trend.+Smart Scan' {
+						If (Get-TMScanType -ne "Smart") { $AddCheck = $false }
+					}
 				}
-				'Trend.+Smart Scan' {
-					If (Get-TMScanType -ne "Conventional") { Continue }
+				If ($AddCheck) {
+					# Only add a single AV check. Break after adding.
+					New-MAXfocusCheck AVUpdateCheck $AVProduct
+					Break
 				}
 			}
-			$NewCheck = New-MAXfocusCheck "AVUpdateCheck" $AVProduct
-			Add-MAXfocusCheck $NewCheck
 		}
 	}
 }
@@ -1083,11 +1083,9 @@ If ($LogChecks -and $AgentMode -eq "server") {
 	[int]$NextUid = $settingsContent["TEST_EVENTLOG"]["NEXTUID"]
 	If ($NextUid -lt 1) { $NextUid = 1 }
 	ForEach ($Check in $DefaultLogChecks) {
-		$NewCheck = New-MAXfocusCheck "EventLogCheck" $NextUid $Check.log $Check.flags $Check.source $Check.ids
-		$oldChecks = Get-MAXfocusChecks "EventLogCheck" "log" $Check.log
-		Add-MAXfocusCheck $NewCheck $oldChecks
-		$checkuid = Get-MAXfocusCheckUid $NewCheck
-		If ($NewChecks.ContainsKey($checkuid)) {
+		$oldChecks = Get-MAXfocusCheckList EventLogCheck log $Check.log
+		If (!($oldChecks)) {
+			New-MAXfocusCheck EventLogCheck $NextUid $Check.log $Check.flags $Check.source $Check.ids
 			$NextUid++
 		}
 	}
@@ -1108,60 +1106,16 @@ If ($LogChecks -and $AgentMode -eq "server") {
 			}
 		}
 		# Add check if missing
-		$NewCheck = New-MAXfocusCheck "CriticalEvents" $Check.eventlog $Check.mode
-		$oldChecks = Get-MAXfocusChecks "CriticalEvents" "eventlog" $Check.eventlog
-		Add-MAXfocusCheck $NewCheck $oldChecks
-	}
-}
-
-## HOUSEKEEPING
-#  Remove duplicate checks if found
-$NewConfig = @{}
-$Duplicates = $false
-Foreach ($Check in $objConfig.GetEnumerator()) {
-	$Instances = @{}
-	$objCheck = $Check.Value
-	Foreach ($object in $objConfig.GetEnumerator()) {
-		$Match = $true
-		Foreach ($property in $objCheck.PSObject.properties) {
-			$name = $property.Name
-			If  ($name -eq "uid") { Continue }
-			$value = $property.Value
-			If ($object.Value.$name -ne $value) { 
-				$Match = $false
-				Continue
-			}
-		}
-		If ($Match) {		
-			$Instances[$object.Key] = $object.Value
+		$oldChecks = Get-MAXfocusCheckList CriticalEvents eventlog $Check.eventlog
+		If (!($oldChecks)) {
+			New-MAXfocusCheck CriticalEvents $Check.eventlog $Check.mode
 		}
 	}
-	# Add random occurence of check (Hashtables are not ordered) - should be only one, really
-	Foreach ($Instance in $Instances.GetEnumerator()) {
-		$NewConfig[$Instance.Key] = $Instance.Value
-		Break
-	}
-	If ($instances.count -gt 1) {
-		$Duplicates = $true
-	}
 }
-
-If ($Duplicates) {
-	Write-Host "Duplicate Checks found"
-	Foreach ($object in $objConfig.GetEnumerator()) {
-		IF (!($NewConfig.ContainsKey($object.Key))) {
-			$RemoveChecks[$object.Key] = $object.Value
-		}
-	}
-	$objConfig = $NewConfig
-	$ConfigChanged = $true
-}
-
 
 
 If ($ConfigChanged) {
-	$Today = (Get-Date).DayOfWeek.value__
-	If (($Apply) -and ($Today -eq $WeekDay)) {
+	If ($Apply) {
 		
 		# Update last runtime to prevent changes too often
 		[int]$currenttime = $(get-date -UFormat %s) -replace ",","." # Handle decimal comma 
@@ -1170,29 +1124,27 @@ If ($ConfigChanged) {
 		# Clear lastcheckday to make DSC run immediately
 		$settingsContent["DAILYSAFETYCHECK"]["LASTCHECKDAY"] = "0"
 		
-		# Save updated NEXTCHECKUID
-		$settingsContent["GENERAL"]["NEXTCHECKUID"] = $uid
-		
-		# Stop agent before writing new config files
-		Stop-Service $gfimaxagent.Name
-		
-		# Recreate XML objects
-		Convert-MAXfocusObjectsToChecks $objConfig
-		
+				
 		# Save all relevant config files
 		ForEach ($Set in $Sets) {
 			$XmlConfig[$Set].Save($XmlFile[$Set])
 		}
 		Out-IniFile $settingsContent $IniFile
 		
-		# Start monitoring agent again
-		Start-Service $gfimaxagent.Name
-		If (Test-Path $LastChangeFile) {
-			# Delete last changelog
-			Get-Content $LastChangeFile
-		}
-
-		# Write output to Dashboard
+		# Restart monitoring agent with a scheduled task with 2 minutes delay.
+		# Register a new task if it does not exist, set a new trigger if it does.
+		Import-Module PSScheduledJob
+		$JobTime = (Get-Date).AddMinutes(2)
+		$JobTrigger = New-JobTrigger -Once -At $JobTime.ToShortTimeString()
+		$JobOption = New-ScheduledJobOption -StartIfOnBattery -RunElevated 
+		$RegisteredJob = Get-ScheduledJob -Name RestartAdvancedMonitoringAgent -ErrorAction SilentlyContinue
+		If ($RegisteredJob) {
+			Set-ScheduledJob $RegisteredJob -Trigger $JobTrigger
+		} Else {
+			Register-ScheduledJob -Name RestartAdvancedMonitoringAgent -ScriptBlock { Restart-Service 'Advanced Monitoring Agent' } -Trigger $JobTrigger -ScheduledJobOption $JobOption
+		}		
+		# Write output to $LastChangeFile
+		# Overwrite file with first command
 		"Last Change applied {0}:" -f $(Get-Date) | Out-File $LastChangeFile
 		"------------------------------------------------------" | Out-File -Append $LastChangeFile
 		If ($RemoveChecks.Count -gt 0) {
@@ -1209,18 +1161,8 @@ If ($ConfigChanged) {
 			Exit 1001 # Internal status code: Changes made
 		}
 	} Else {
-		If (Test-Path $LastChangeFile) {
-			# Print last change to STDOUT
-			Write-Host "------------------------------------------------------"
-			Get-Content $LastChangeFile
-			Write-Host "------------------------------------------------------"
-		}
-		If ($Apply) {
-			$DayNames = (New-Object System.Globalization.CultureInfo("en-US")).DateTimeFormat.DayNames
-			Write-Host ("Following changes will be applied on {0}:" -f $DayNames[$Weekday - 1])
-		} Else {
-			Write-Host "Recommended changes:"
-		}
+		Write-Host "Recommended changes:"
+
 		If ($RemoveChecks.Count -gt 0) {
 			Write-Host "Checks to be removed:"
 			Format-Output $RemoveChecks 
@@ -1228,6 +1170,12 @@ If ($ConfigChanged) {
 		If ($NewChecks.Count -gt 0) {
 			Write-Host "Checks to be added:"
 			Format-Output $NewChecks 
+		}
+		If (Test-Path $LastChangeFile) {
+			# Print last change to STDOUT
+			Write-Host "------------------------------------------------------"
+			Get-Content $LastChangeFile
+			Write-Host "------------------------------------------------------"
 		}
 		If ($ReportMode) {
 			Exit 0 # Needed changes have been reported, but do not fail the check
@@ -1237,12 +1185,6 @@ If ($ConfigChanged) {
 	}
 } Else {
 	# We have nothing to do. This Device has passed the test!
-	If (Test-Path $LastChangeFile) {
-		# Print last change to STDOUT
-		Write-Host "------------------------------------------------------"
-		Get-Content $LastChangeFile
-		Write-Host "------------------------------------------------------"
-	}
 	Write-Host "Current Configuration Verified  - OK:"
 	If ($Performance) 		{ Write-Host "Performance Monitoring checks verified: OK"}
 	If ($DriveSpaceCheck) 	{ Write-Host "Disk usage monitored on all harddrives: OK"}
@@ -1254,6 +1196,22 @@ If ($ConfigChanged) {
 	If ($Backup) 			{ Write-Host "Unmonitored Backup Products not found: OK"}
 	If ($Antivirus) 		{ Write-Host "Unmonitored Antivirus checks verified: OK"}
 	Write-Host "All checks verified. Nothing has been changed."
+	If (Test-Path $LastChangeFile) {
+		# Print last change to STDOUT
+		Write-Host "------------------------------------------------------"
+		Get-Content $LastChangeFile
+		Write-Host "------------------------------------------------------"
+	}
+	# Try to make Windows autostart monitoring agent if it fails
+	# Try to read the FailureActions property of Advanced Monitoring Agent
+	# If it does not exist, create it with sc.exe
+	$FailureActions = Get-ItemProperty "HKLM:\System\CurrentControlSet\Services\Advanced Monitoring Agent" FailureActions -ErrorAction SilentlyContinue
+	If (!($FailureActions)) {
+		# Reset count every 24 hours, restart service after twice the 247Interval minutes
+		[int]$restartdelay = 120000 * $247Interval 
+		$servicename = $gfimaxagent.Name
+		sc.exe failure "$servicename" reset=86400 actions= restart/$restartdelay
+	}
 	Exit 0 # SUCCESS
 }
 

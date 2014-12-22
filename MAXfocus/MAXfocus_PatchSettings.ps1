@@ -19,11 +19,14 @@ If (!($PatchManagement)) {
 	Exit 0
 }
 
-$Schedule = $PatchManagement.schedule2.InnerText
+$Schedule = $PatchManagement.schedule2
+If ($Schedule -is [System.Xml.XmlElement]) { $Schedule = $Schedule.InnerText}
 $Mode = $PatchManagement.mode
 $RebootDevice = $PatchManagement.rebootdevice
-$RebootCriteria = $PatchManagement.rebootcriteria.InnerText
-$AutoApproval = $PatchManagement.autoapproval.InnerText
+$RebootCriteria = $PatchManagement.rebootcriteria
+If ($RebootCriteria -is [System.Xml.XmlElement]) { $RebootCriteria = $RebootCriteria.InnerText}
+$AutoApproval = $PatchManagement.autoapproval
+If ($AutoApproval -is [System.Xml.XmlElement]) { $AutoApproval = $AutoApproval.InnerText}
 
 $ApprovalOptions = @([regex]::Split($AutoApproval,","))
 $Vendors = @("Microsoft", "Other Vendors")
