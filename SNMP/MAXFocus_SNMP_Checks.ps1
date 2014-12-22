@@ -255,7 +255,7 @@ $settingsContent = Get-IniContent($IniFile)
 
 # Load SNMP Library. Download file if it does not exist
 $SNMP_lib = $ScriptLib + "\SharpSnmpLib.dll"
-$SNMP_lib_URL = "xxxxxxxxxxxxxxxxx"
+$SNMP_lib_URL = "https://github.com/klemmestad/PowerShell/raw/master/SNMP/lib/SharpSnmpLib.dll"
 
 If (!(Test-Path $SNMP_lib)) {
 	If (!(Test-Path -PathType Container $ScriptLib)) {
