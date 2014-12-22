@@ -314,6 +314,8 @@ If ($Target -match "/") {
 			}
 		}
 	}
+} Else {
+	$SNMPhosts = $Target
 }
 
 
