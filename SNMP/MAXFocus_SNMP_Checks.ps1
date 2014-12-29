@@ -1,9 +1,4 @@
-﻿[CmdletBinding(SupportsShouldProcess=$false, 
-      PositionalBinding=$false,
-      HelpUri = 'http://klemmestad.com/2014/12/10/add-snmp-checks-to-maxfocus-automatically/',
-      ConfirmImpact='Medium')]
-[OutputType([String])]
- <#
+﻿ <#
 .DESCRIPTION
 	Scan an SNMP target for known OIDs with values.
 	Add SNMP checks to agent.
@@ -11,53 +6,123 @@
 .AUTHOR
    Hugo L. Klemmestad <hugo@klemmestad.com>
 .DATE
-   003.11.2014
+   03.11.2014
 .LINK
    http://klemmestad.com/2014/12/10/add-snmp-checks-to-maxfocus-automatically/
+.VERSION
+   1.01
 #>
 
+# Using [string] for almost all parameters to avoid parameter validation fail
 Param (
-	[Parameter(Mandatory=$false)]
-    [ValidateNotNullOrEmpty()]
 	[string]$Community = "public",
 
-	[Parameter(Mandatory=$false)]
 	[array]$Target = "localhost",
 
-	[Parameter(Mandatory=$false)]
-    [ValidateScript({$_ -ge 1 -and $_ -le 65535})]
-	[int]$UDPport = 161,
+	[string]$UDPport = 161,
 
-	[Parameter(Mandatory=$false)]
 	[switch]$Apply = $false,
 
-	[Parameter(Mandatory=$false)]
-    [ValidateSet("On", "Off")]
-	[string]$ReportMode = "On"
+	[string]$ReportMode = "On",
+
+	[string]$Name,
+	
+	# We must accept -logfile, because it is always given by task_start.js
+	# Not accepting it will make the script fail with not output to Dashboard
+	# Put it in %TEMP% if script is run interactively
+	[string]$logfile = "{0}\logfile.log" -f $env:TEMP,
+	
+	[switch]$Debug = $false,
+	[switch]$Verbose = $false
+	
 )
-# Invert Reportmode
-If ($ReportMode -eq 'On') { 
-	[bool]$ReportMode = $true 
-} Else {
-	[bool]$ReportMode = $false 
+
+
+
+# Enhanced Output-Host function to capture log info
+function Output-Host  {
+	[string]$Text = ""
+	Foreach ($arg in $args) { $Text += $arg }
+	Write-Host $Text
+	# Include normal output in debug log
+	Output-Debug $Text
 }
+
+
+# Output text to $logfile if Debug set
+function Output-Debug  {
+	If ($Debug) {
+		[string]$Text = ""
+		Foreach ($arg in $args) { $Text += $arg }
+		('{0}: {1}' -f (Get-Date),$Text) | Out-File -Append $logfile
+	}
+}
+
+# Output text to STDOUT if Verbose set
+function Output-Verbose {
+	If ($Verbose) {
+		[string]$Text = "VERBOSE: "
+		Foreach ($arg in $args) { $Text += $arg }
+		Output-Host $Text
+	}
+}
+
+# Print to STDOUT to make sure task_start.js gets some output
+Output-Host "Result: "
+
+# Require version 2.0
+If (!($PSVersionTable)) {
+	Output-Host "Error: Script requires Powershell version 2.0 or greater."
+	Output-Host "Aborting.."
+	#Exit 0
+}
+
+Output-Verbose ("Hostname: {0}" -f $env:COMPUTERNAME)
+Output-Verbose ("PowerShell PSVersion: {0}" -f $PSVersionTable.PSVersion)
+Output-Verbose ("PowerShell CLRVersion: {0}" -f $PSVersionTable.CLRVersion)
+Output-Verbose ("PowerShell BuildVersion: {0}" -f $PSVersionTable.BuildVersion)
+
+# Validate $Community
+If ($Community.Length -eq 0) {
+	Output-Verbose "-Community has Zero length. Using Default value of public."
+	$Community = "public"
+}
+Output-Verbose ("Using {0} as value for Community string." -f $Community)
+
+# Give early feedback on Target
+Output-Verbose ("Number of Targets: {0}" -f $Target.Count)
+[int]$Count = 1
+Foreach ($element in $Target) {
+	Output-Verbose ("Target {0}: {1}" -f $Count,$element)
+	$Count++
+}
+
+# Validate $UDPport
+$x2 = 0
+$isNum = [System.Int32]::TryParse($UDPport, [ref]$x2)
+If ($isNUM) {
+	[int]$UDPport = $UDPport
+	If ($UDPport -lt 1 -or $UDPport -gt 65535) {
+		Output-Verbose "-UDPport $UDPport is out of bounds. Using Default value of 161."
+		[int]$UDPport = 161
+	}
+} Else {
+	Output-Verbose "-UDPport cannot be converted to Integer. Using Default value of 161."
+	[int]$UDPport = 161
+}
+Output-Verbose "Using $UDPport for -UDPport."
+
+# Invert Reportmode
+If ($ReportMode -match 'Off' -or $ReportMode -match 'false') { 
+	[bool]$ReportMode = $false 
+	Output-Verbose "Report Mode is OFF"
+} Else {
+	[bool]$ReportMode = $true 
+	Output-Verbose "Report Mode is ON"
+}
+Output-Verbose "Using $ReportMode as value for -ReportMode."
 
 ## VARIUS FUNCTIONS
-# Return an array of values from an array of XML Object
-function Get-GFIMAXChecks ($xmlArray, $property) {
-	$returnArray = @()
-	foreach ($element in $xmlArray) {
-		If ($element.$property -is [System.Xml.XmlElement]) {
-			$returnArray += $element.$property.InnerText
-		} Else {
-			$returnArray += $element.$property
-		}
-	}
-	If ($returnArray) {
-		Return $returnArray
-	}
-}
-
 
 # Downloaded from 
 # http://blogs.technet.com/b/heyscriptingguy/archive/2011/08/20/use-powershell-to-work-with-any-ini-file.aspx
@@ -156,7 +221,9 @@ Function New-GenericObject {
 function Invoke-SNMPget ([string]$sIP, $sOIDs, [string]$Community = "public", [int]$UDPport = 161, [int]$TimeOut=3000) {
     # $OIDs can be a single OID string, or an array of OID strings
     # $TimeOut is in msec, 0 or -1 for infinite
- 
+	If ($Verbose) {
+	 	Output-Debug ('Invoke-SNMPget called with $sIP={0}, $sOIDs={1}, $Community={2}, $UDPport={3}, $TimeOut={4}' -f $sIP, $sOIDs, $Community, $UDPport, $TimeOut)
+	}
     # Create OID variable list
 	If ($PSVersionTable.PSVersion.Major -lt 3) {
     	$vList = New-GenericObject System.Collections.Generic.List Lextm.SharpSnmpLib.Variable                        # PowerShell v1 and v2
@@ -228,6 +295,7 @@ Function Get-IPV4NetworkEndIP ($strNetwork) {
 
 ## SETUP ENVIRONMENT
 # Find "Advanced Monitoring Agent" service and use path to locate files
+Output-Verbose "Locating Advanced Monitoring service and setting up variables."
 $gfimaxagent = Get-WmiObject Win32_Service | Where-Object { $_.Name -eq 'Advanced Monitoring Agent' }
 $gfimaxexe = $gfimaxagent.PathName
 $gfimaxpath = Split-Path $gfimaxagent.PathName.Replace('"',"") -Parent
@@ -257,105 +325,153 @@ $settingsContent = Get-IniContent($IniFile)
 $SNMP_lib = $ScriptLib + "\SharpSnmpLib.dll"
 $SNMP_lib_URL = "https://github.com/klemmestad/PowerShell/raw/master/SNMP/lib/SharpSnmpLib.dll"
 
-If (!(Test-Path $SNMP_lib)) {
-	If (!(Test-Path -PathType Container $ScriptLib)) {
-		New-Item -ItemType Directory -Force -Path $ScriptLib
+# Catch and output any errors
+$ErrorActionPreference = 'STOP'
+Try {
+	If (!(Test-Path $SNMP_lib)) {
+		Output-Verbose "SharpSnmpLib.dll not found. Trying to download."
+		If (!(Test-Path -PathType Container $ScriptLib)) {
+			Output-Verbose "Creating directory $Scriptlib"
+			New-Item -ItemType Directory -Force -Path $ScriptLib
+		}
+		
+		$webclient = New-Object System.Net.WebClient
+		Output-Verbose ("Starting download from {0}" -f $SNMP_lib_URL)
+		$webclient.DownloadFile($SNMP_lib_URL,$SNMP_lib)
+		Output-Verbose "SNMP library not found. Downloaded from web."
 	}
-	
-	$webclient = New-Object System.Net.WebClient
-	$webclient.DownloadFile($SNMP_lib_URL,$SNMP_lib)
-}
 
-$null = [reflection.assembly]::LoadFrom($SNMP_lib)
+	$null = [reflection.assembly]::LoadFrom($SNMP_lib)
 
-# Read configuration of checks. Create an XML object if they do not exist yet.
-ForEach ($Set in $Sets) {
-	$XmlConfig[$Set]  = New-Object -TypeName XML
-	$XmlFile[$Set] = $gfimaxpath + "\{0}_Config.xml" -f $Set
-	If (Test-Path $XmlFile[$Set]) { 
-		$XmlConfig[$Set].Load($XmlFile[$Set])
-		$XmlConfig[$Set].DocumentElement.SetAttribute("modified","1")
-	} Else { 
-		$decl = $XmlConfig[$Set].CreateXmlDeclaration("1.0", "ISO-8859-1", $null)
-		$rootNode = $XmlConfig[$Set].CreateElement("checks")
-		$result = $rootNode.SetAttribute("modified", "1")
-		$result = $XmlConfig[$Set].InsertBefore($decl, $XmlConfig[$Set].DocumentElement)
-		$result = $XmlConfig[$Set].AppendChild($rootNode)
+	# Read configuration of checks. Create an XML object if they do not exist yet.
+	ForEach ($Set in $Sets) {
+		$XmlConfig[$Set]  = New-Object -TypeName XML
+		$XmlFile[$Set] = $gfimaxpath + "\{0}_Config.xml" -f $Set
+		If (Test-Path $XmlFile[$Set]) { 
+			$XmlConfig[$Set].Load($XmlFile[$Set])
+			$XmlConfig[$Set].DocumentElement.SetAttribute("modified","1")
+		} Else { 
+			$decl = $XmlConfig[$Set].CreateXmlDeclaration("1.0", "ISO-8859-1", $null)
+			$rootNode = $XmlConfig[$Set].CreateElement("checks")
+			$result = $rootNode.SetAttribute("modified", "1")
+			$result = $XmlConfig[$Set].InsertBefore($decl, $XmlConfig[$Set].DocumentElement)
+			$result = $XmlConfig[$Set].AppendChild($rootNode)
+		}
 	}
-}
 
-# Check Agent mode, workstation or server
-$AgentMode = $AgentConfig.agentconfiguration.agentmode
+	# Check Agent mode, workstation or server
+	$AgentMode = $AgentConfig.agentconfiguration.agentmode
 
-If (Test-Path $snmp_sys) {
-	$snmp_presets.Load($snmp_sys)
-}
+	If (Test-Path $snmp_sys) {
+		$snmp_presets.Load($snmp_sys)
+	}
 
-$System = ".1.3.6.1.2.1.1.2.0"
-$SNMPhosts = @()
+	$System = ".1.3.6.1.2.1.1.2.0"
+	$SNMPhosts = @()
 
-If ($Target -match "/") {
-	$FirstIP = @((Get-IPV4NetworkStartIP ($Target)).ToString().Split("."))
-	$LastIP = @((Get-IPV4NetworkEndIP ($Target)).ToString().Split("."))
+	If ($Target -match "/") {
+		$FirstIP = @((Get-IPV4NetworkStartIP ($Target)).ToString().Split("."))
+		$LastIP = @((Get-IPV4NetworkEndIP ($Target)).ToString().Split("."))
 
-	ForEach ($Byte1 in $FirstIP[0]..$LastIP[0]) {
-		ForEach ($Byte2 in $FirstIP[1]..$LastIP[1]) {
-			ForEach ($Byte3 in $FirstIP[2]..$LastIP[2]) {
-				ForEach ($Byte4 in $FirstIP[3]..$LastIP[3]) {
-					$SNMPhost = "{0}.{1}.{2}.{3}" -f $Byte1, $Byte2, $Byte3, $Byte4
-					
-					# Test if Target responds on SNMP port
-					$oidValue = Invoke-SNMPget $SNMPhost $System $Community $UDPport
+		ForEach ($Byte1 in $FirstIP[0]..$LastIP[0]) {
+			ForEach ($Byte2 in $FirstIP[1]..$LastIP[1]) {
+				ForEach ($Byte3 in $FirstIP[2]..$LastIP[2]) {
+					ForEach ($Byte4 in $FirstIP[3]..$LastIP[3]) {
+						$SNMPhost = "{0}.{1}.{2}.{3}" -f $Byte1, $Byte2, $Byte3, $Byte4
+						
+						# Test if Target responds on SNMP port
+						Output-Verbose ('Trying to read value of "System" on {0}.' -f $SNMPhost)
+						$oidValue = Invoke-SNMPget $SNMPhost $System $Community $UDPport
 
-					If ($oidValue.Data -notmatch "Error") {
-						$SNMPhosts += $SNMPhost
+						If ($oidValue.Data -notmatch "Error") {
+							Output-Verbose ('Host {0} responded with {1}' -f $SNMPhost, $oidValue.Data)
+							$SNMPhosts += $SNMPhost
+						} Else {
+							Output-Verbose ('Host {0} did not respond.' -f $SNMPhost)
+						}
 					}
 				}
 			}
 		}
+	} Else {
+		$SNMPhosts = $Target
 	}
-} Else {
-	$SNMPhosts = $Target
+} Catch {
+	Output-Host ("ERROR: Script failed on item: {0}" -f $_.Exception.ItemName)
+	Output-Host $_.Exception.Message
+	Exit 1000
 }
-
 
 ForEach ($SNMPhost in $SNMPhosts) {
 	# Create REF variable of correct type
 	$ip = [System.Net.IPAddress]::Parse("127.0.0.1")
 	# Try to parse $SNMPhost as IP address
 	If (!([System.Net.IPAddress]::TryParse($SNMPhost, [ref] $ip))) {
+		Output-Verbose ('Tried to parse {0} as IP address. Assuming it is a DNS name.' -f $SNMPhost)
 		# $SNMPhost is not a valid IP address. Maybe it is a hostname?
 		Try {
 			 $ip = [System.Net.Dns]::GetHostAddresses($SNMPhost)[0]
+			 If ($ip -eq "::1") { $ip = [System.Net.IPAddress]::Parse("127.0.0.1") }
 		} Catch {
-			Write-Host $("ERROR: Could not resolve hostname ""{0}""" -f $SNMPhost)
+			Output-Host ("ERROR: Could not resolve hostname ""{0}""" -f $SNMPhost)
 			Continue
 		}
+		Output-Verbose ('Resolved {0} to IP address {1}' -f $SNMPhost, $ip)
+	} Else {
+		Output-Verbose ('Current Target is an IP address: {0}' -f $ip)
 	}
+	Output-Verbose ('Using {0} as IP address of current SNMPhost' -f $ip)
+	Try {
+		# Test if Target responds on SNMP port
+		Output-Verbose ('Trying to read value of "System" on {0}.' -f $SNMPhost)
+		$oidValue = Invoke-SNMPget $ip $System $Community $UDPport
 
-	ForEach ($preset in $snmp_presets.presets.preset) {
-		$NewCheck = @{}
-		$oidValue = Invoke-SNMPget $ip $preset.oid $Community $UDPport
-		If ("NoSuchObject","NoSuchInstance","Error" -notcontains $oidValue.Data) {
-			$oid = $preset.oid
-			$CheckExists = $XmlConfig["247"].checks.SelectSingleNode("SnmpCheck[host=""$SNMPhost"" and oid=""$oid""]")
-			If(!($CheckExists)) {
-				$NewCheck = @{
-					"checktype" = "SnmpCheck";
-					"checkset" = "247";
-					"product" = $SNMPhost + " - " +$preset.description;
-					"host" = $SNMPhost;
-					"port" = $UDPport;
-					"community" = $Community;
-					"oid" = $oid;
-					"op" = $preset.op;
-					"testvalue" = $preset.testvalue;
-					"snmpversion" = 2
-					}
-				
-				$NewChecks += $NewCheck
+		If ($oidValue.Data -notmatch "Error") {
+			Output-Verbose ('Host {0} responded to SNMP. Testing presets.' -f $SNMPhost)
+		} Else {
+			Output-Verbose ('Host {0} did not respond to SNMP using {1} as Community String.' -f $SNMPhost,$Community)
+			Continue
+		}
+		Output-Verbose "Looping through all presets. Use -Debug for full details."
+		ForEach ($preset in $snmp_presets.presets.preset) {
+			$NewCheck = @{}
+			$oidValue = Invoke-SNMPget $ip $preset.oid $Community $UDPport
+			If ("NoSuchObject","NoSuchInstance","Error" -notcontains $oidValue.Data) {
+				If ($Name) {
+					$Description = '{0} ({1}) - {3} {4} - {2}' -f $Name, $SNMPhost, $preset.description, $preset.vendor, $preset.product
+				} Else {
+					$Description = '{0} - {2} {3} - {1}' -f  $SNMPhost, $preset.description, $preset.vendor, $preset.product
+				}
+				$oid = $preset.oid
+				$CheckExists = $XmlConfig["247"].checks.SelectSingleNode("SnmpCheck[host=""$SNMPhost"" and oid=""$oid""]")
+				If(!($CheckExists)) {
+					Output-Verbose ("Valid check {0}" -f $Description)
+					$NewCheck = @{
+						"checktype" = "SnmpCheck";
+						"checkset" = "247";
+						"product" = $Description;
+						"host" = $SNMPhost;
+						"port" = $UDPport;
+						"community" = $Community;
+						"oid" = $oid;
+						"op" = $preset.op;
+						"testvalue" = $preset.testvalue;
+						"snmpversion" = 2
+						}
+					
+					$NewChecks += $NewCheck
+				} Else {
+					Output-Debug ('Testing {0}' -f $Description)
+					If ($CheckExists.product -is [System.Xml.XmlElement]) { $Checkname = $CheckExists.product.InnerText}
+					Else { $Checkname = $CheckExists.product}
+					Output-Verbose ("This check already exist with name '{0}'" -f $Checkname ) 
+				}
 			}
 		}
+	} Catch {
+		Output-Host ("ERROR: Script failed on item: {0}" -f $_.Exception.ItemName)
+		Output-Host $_.Exception.Message
+		Exit 1000
 	}
 }
 
@@ -406,11 +522,11 @@ If($NewChecks[0])
 		}		
 		
 		# Write output to Dashboard
-		Write-Host "Checks added:"
+		Output-Host "Checks added:"
 		If ($NewChecks) 
 		{
 			ForEach ($Check in $NewChecks) {
-				Write-Host $Check["product"]
+				Output-Host $Check["product"]
 			}
 		}
 		If ($ReportMode) {
@@ -419,11 +535,11 @@ If($NewChecks[0])
 			Exit 1001 # Internal status code: Suggested changes, but nothing has been touched
 		}
 	} Else {
-		Write-Host "New SNMP Checks Available:"
+		Output-Host "New SNMP Checks Available:"
 		If ($NewChecks) 
 		{
 			ForEach ($Check in $NewChecks) {
-				Write-Host $Check["product"]
+				Output-Host $Check["product"]
 			}
 		}
 		If ($ReportMode) {
@@ -434,6 +550,6 @@ If($NewChecks[0])
 	}
 } Else {
 	# We have nothing to do. 
-	Write-Host "Nothing to do."
+	Output-Host "Nothing to do."
 	Exit 0 # SUCCESS
 }
