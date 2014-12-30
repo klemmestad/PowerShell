@@ -1,9 +1,4 @@
-﻿[CmdletBinding(SupportsShouldProcess=$false, 
-	PositionalBinding=$false,
-	HelpUri = 'http://klemmestad.com/2014/12/22/automate-maxfocus-with-powershell/',
-	ConfirmImpact='Medium')]
-[OutputType([String])]
-<#
+﻿<#
 .Synopsis
    Compares existing configuration of a MAXfocus monitoring agent against
    default settings stored in this script. Can add missing default checks
@@ -25,6 +20,8 @@
    http://klemmestad.com/2014/12/22/automate-maxfocus-with-powershell/
 .LINK
    https://www.maxfocus.com/remote-management/automated-maintenance
+.VERSION
+   1.1
 .FUNCTIONALITY
    When the script finds that checks has to be added it will create valid XML
    entries and add them to agent configuration files. It uses Windows scheduled
@@ -34,89 +31,151 @@
 ## SETTINGS
 # A few settings are handled as parameters 
 param (	
-	# Accept all default check values in one go
-    [Parameter(Mandatory=$false)]
-	[switch]$All = $false,
-
-    [Parameter(Mandatory=$false)]
+	[switch]$All = $false, # Accept all default check values in one go
 	[switch]$Apply = $false, # -Apply will write new checks to configfiles and reload agent
-	
-	# -ReportMode will report missing checks, but not fail the script
-    [Parameter(Mandatory=$false)]
-    [ValidateSet("On", "Off")]
-	[string]$ReportMode = "On",
-
-	# Set to $false if you do not want performance checks
-    [Parameter(Mandatory=$false)]
-	[switch]$Performance = $false, 
-	
-	# This is useful on a Fault History report. Otherwise useless.
-    [Parameter(Mandatory=$false)]
-	[switch]$PingCheck = $false,
-	
-	# Detect SQL servers
-    [Parameter(Mandatory=$false)]
-	[switch]$MSSQL = $false, 
-	
-	# Enable physical disk check if SMART status is available
-    [Parameter(Mandatory=$false)]
-	[switch]$SMART = $false, 
-	
-	# Configure a basic backup check if a compatible product is recognized
-    [Parameter(Mandatory=$false)]
-	[switch]$Backup = $false, 
-	
-	# Configure an Antivirus check if a compatible product is recognized
-    [Parameter(Mandatory=$false)]
-	[switch]$Antivirus = $false, 
-	
-	# Configure default log checks
-    [Parameter(Mandatory=$false)]
-	[switch]$LogChecks = $false, 
-	
-	# Freespace as number+unit, i.e 10%, 5GB or 500MB
-    [Parameter(Mandatory=$false)]
-	[ValidatePattern('\d+(%|MB|GB)$')]
-	[string]$DriveSpaceCheck = $null, 
-	
-	 # "All" or "DefaultOnly". 
-	[Parameter(Mandatory=$false)]
-    [ValidateSet("All", "Default")]
-	[string]$WinServiceCheck = "",
-	
-	# percentage as integer
-	[Parameter(Mandatory=$false)]
-    [ValidateScript({$_ -ge 1 -and $_ -le 100})]
-	[int]$DiskSpaceChange, 
-
-	# 5 or 15 minutes
-	[Parameter(Mandatory=$false)]
-    [ValidateSet("5", "15")]
-	[string]$ServerInterval = "5", 
-
-	# 30 or 60 minutes
-	[Parameter(Mandatory=$false)]
-    [ValidateSet("30", "60")]
-	[string]$PCInterval = "30", 
-
-	# When DSC check should run in whole hours. Minutes not supported by agent.
-	[Parameter(Mandatory=$false)]
-    [ValidateScript({$_ -ge 0 -and $_ -le 23})]
-	[string]$DSCHour = "8", 
-	
-	# Used to source this script for its functions
-    [Parameter(Mandatory=$false)]
-	[switch]$Library = $false 
+	[string]$ReportMode = "On", # -ReportMode will report missing checks, but not fail the script
+	[switch]$Performance = $false, # Set to $false if you do not want performance checks
+	[switch]$PingCheck = $false, # This is useful on a Fault History report. Otherwise useless.
+	[switch]$MSSQL = $false, # Detect SQL servers
+	[switch]$SMART = $false, # Enable physical disk check if SMART status is available
+	[switch]$Backup = $false, # Configure a basic backup check if a compatible product is recognized
+	[switch]$Antivirus = $false, # Configure an Antivirus check if a compatible product is recognized
+	[switch]$LogChecks = $false, # Configure default log checks
+	[string]$DriveSpaceCheck = $null, # Freespace as number+unit, i.e 10%, 5GB or 500MB
+	[string]$WinServiceCheck = "",# "All" or "DefaultOnly". 
+	[string]$DiskSpaceChange, # percentage as integer
+	[string]$ServerInterval = "15", # 5 or 15 minutes
+	[string]$PCInterval = "60", # 30 or 60 minutes
+	[string]$DSCHour = "8", # When DSC check should run in whole hours. Minutes not supported by agent.
+	[switch]$Debug = $false,
+	[switch]$Verbose = $false,
+	[string]$logfile, # A parameter always supplied by MAXfocus. We MUST accept it.
+	[switch]$Library = $false # Used to source this script for its functions
 )
 
+
+# Enhanced Output-Host function to capture log info
+function Output-Host  {
+	[string]$Text = ""
+	Foreach ($arg in $args) { $Text += $arg }
+	Write-Host $Text
+	# Include normal output in debug log
+	Output-Debug $Text
+}
+
+
+# Output text to $logfile if Debug set
+function Output-Debug  {
+	If ($Debug) {
+		[string]$Text = ""
+		Foreach ($arg in $args) { $Text += $arg }
+		('{0}: {1}' -f (Get-Date),$Text) | Out-File -Append $logfile
+	}
+}
+
+# Output text to STDOUT if Verbose set
+function Output-Verbose {
+	If ($Verbose) {
+		[string]$Text = "VERBOSE: "
+		Foreach ($arg in $args) { $Text += $arg }
+		Output-Host $Text
+	}
+}
+
+If ($All)
+{
+	Output-Verbose "-All detected. Loading default values."
+	## DEFAULT CHECKS
+	$Performance = $true # Set to $false if you do not want performance checks
+	$PingCheck = $false # This is useful on a Fault History report. Otherwise useless.
+	$MSSQL = $true # Detect SQL servers
+	$SMART = $true # Enable physical disk check if SMART status is available
+	$Antivirus = $true # Configure an Antivirus check if a compatible product is recognized
+	$DriveSpaceCheck = "10%" # Freespace as number+unit, i.e 10%, 5GB or 500MB
+	$WinServiceCheck = "All" # "All" or "Default". 
+	$DiskSpaceChange = 10 # percentage as integer
+	$Backup = $true # Try to configure Backup Monitoring
+	$LogChecks = $true # Configure default eventlog checks
+	$ServerInterval = "5"
+	$PCInterval = "30"
+	$ReportMode = $true
+}
+
 # Convert Reportmode to Boolean
-If ($ReportMode -eq 'On') { 
+If ($ReportMode -Match 'On') { 
 	[bool]$ReportMode = $true 
 } Else {
 	[bool]$ReportMode = $false 
 }
 
-Set-StrictMode -Version 2
+# Test DriveSpaceCheck
+If (($DriveSpaceCheck) -and ($DriveSpaceCheck -match '\d+(%|MB|GB)$')) {
+	Output-Verbose ('-DrivespaceCheck {0} validated OK.' -f $DriveSpaceCheck)
+} ElseIf ($DriveSpaceCheck) {
+	Output-Host ('ERROR: -DriveSpaceCheck {0} could not be validated. Use 10%, 10MB or 10GB where "10" is any integer.' -f $DriveSpaceCheck)
+	Output-Host 'WARNING: Ignoring -DriveSpaceCheck.'
+	$DriveSpaceCheck = ''
+}
+
+# Test WinServiceCheck
+If (($WinServiceCheck) -and ('All', 'Default', 'DefaultOnly' -contains $WinServiceCheck)) {
+	Output-Verbose ('-WinServiceCheck {0} validated OK.' -f $WinServiceCheck)
+} ElseIf ($WinServiceCheck) {
+	Output-Host ('ERROR: -WinServiceCheck {0} could not be validated. Use All, Default or DefaultOnly' -f $WinServiceCheck)
+	Output-Host 'WARNING: Ignoring -WinServiceCheck.'
+	$WinServiceCheck = ''
+}
+
+# Test DiskSpaceChange
+If ($DiskSpaceChange) {
+	$x2 = 0
+	$isNum = [System.Int32]::TryParse($DiskSpaceChange, [ref]$x2)
+	If ($isNUM) {
+		[int]$DiskSpaceChange = $DiskSpaceChange
+		Output-Verbose ("-DiskSpaceChange {0} validated OK." -f $DiskSpaceChange)
+	} Else {
+		Output-Host ("ERROR: -DiskSpaceChange {0} could not be validated. Use a valid integer." -f $DiskSpaceChange)
+		Output-Host 'WARNING: Ignoring -DiskSpaceChange.'
+		[string]$DiskSpaceChange = ""
+	}
+}
+
+# Test ServerInterval
+If ("5", "15" -contains $ServerInterval) {
+	Output-Verbose ('-ServerInterval {0} validated OK.' -f $ServerInterval)
+} Else {
+	Output-Host ('ERROR: -ServerInterval {0} could not be validated. Use 5 or 15.' -f $ServerInterval)
+	Output-Host 'WARNING: Setting value of -ServerInterval to default of 15.'
+	$ServerInterval = "15"
+}
+
+# Test PCInterval
+If ("30", "60" -contains $PCInterval) {
+	Output-Verbose ('-PCInterval {0} validated OK.' -f $PCInterval)
+} Else {
+	Output-Host ('ERROR: -PCInterval {0} could not be validated. Use 30 or 60.' -f $PCInterval)
+	Output-Host 'WARNING: Setting value of -PCInterval to default of 60.'
+	$PCInterval = "60"
+}
+
+# Test DSChour
+If ($DSChour) {
+	$x2 = 0
+	$isNum = [System.Int32]::TryParse($DSChour, [ref]$x2)
+	If (($isNUM) -and ($x2 -ge 0 -and $x2 -lt 24)) {
+		Output-Verbose ("-DSChour {0} validated OK." -f $DSChour)
+	} Else {
+		Output-Host ("ERROR: -DSChour {0} could not be validated. Use a valid number between 0 (12 AM) and 23 (11 PM)." -f $DSChour)
+		Output-Host 'WARNING: Setting value of -DSChour to default of 8.'
+		[string]$DSChour = "8"
+	}
+}
+
+# Set strict mode if running interactively. Very useful when testing new code
+If ($MyInvocation.MyCommand.Name -eq 'Verify-MAXfocusConfig.ps1') {
+	Output-Host "WARNING: Running Interactively. Using Strict Mode."
+	Set-StrictMode -Version 2
+}
 
 ## VARIUS FUNCTIONS
 # 
@@ -602,23 +661,8 @@ Function Is-SMARTavailable () {
 If ($Library) { Exit 0 }
 
 # Force the script to output something to STDOUT, else errors may cause script timeout.
-Write-Host " "
+Output-Host " "
 
-If ($All)
-{
-	## DEFAULT CHECKS
-	$Performance = $true # Set to $false if you do not want performance checks
-	$PingCheck = $false # This is useful on a Fault History report. Otherwise useless.
-	$MSSQL = $true # Detect SQL servers
-	$SMART = $true # Enable physical disk check if SMART status is available
-	$Antivirus = $true # Configure an Antivirus check if a compatible product is recognized
-	$DriveSpaceCheck = "10%" # Freespace as number+unit, i.e 10%, 5GB or 500MB
-	$WinServiceCheck = "All" # "All" or "Default". 
-	$DiskSpaceChange = 10 # percentage as integer
-	$Backup = $true # Try to configure Backup Monitoring
-	$LogChecks = $true # Configure default eventlog checks
-	$ReportMode = $true
-}
 
 $DefaultLogChecks = @(
 	@{ "log" = "Application|Application Hangs"; # Application log | Human readable name
@@ -682,6 +726,7 @@ $LastChangeFile = $gfimaxpath + "\LastChange.log"
 $NewChecks = @()
 $RemoveChecks = @()
 $oldChecks = @()
+$ChangedSettings = @{}
 
 # The prefix to the config files we need to read
 $Sets = @("247", "DSC")
@@ -713,12 +758,12 @@ If ($Apply) {
 		}
 	}
 	If (!($Apply)) {
-		Write-Host "Changes Applied."
+		Output-Host "Changes Applied."
 		If (Test-Path $LastChangeFile) {
 			# Print last change to STDOUT
-			Write-Host "------------------------------------------------------"
+			Output-Host "------------------------------------------------------"
 			Get-Content $LastChangeFile
-			Write-Host "------------------------------------------------------"
+			Output-Host "------------------------------------------------------"
 		}
 	Exit 0 # SUCCESS
 	}
@@ -762,24 +807,28 @@ Else { $247Interval = $PCInterval }
 # Check if INI file is correct
 If ($settingsContent["247CHECK"]["ACTIVE"] -ne "1") {
 	$settingsContent["247CHECK"]["ACTIVE"] = "1"
+	$ChangedSettings['247_Checks'] = 'Enabled'
 	$ConfigChanged = $true
 	$settingsChanged = $true
 }
 
 If ($settingsContent["247CHECK"]["INTERVAL"] -ne $247Interval) {
 	$settingsContent["247CHECK"]["INTERVAL"] = $247Interval
+	$ChangedSettings['247_Interval'] = $247Interval
 	$ConfigChanged = $true
 	$settingsChanged = $true
 }
 
 If ($settingsContent["DAILYSAFETYCHECK"]["ACTIVE"] -ne "1") {
 	$settingsContent["DAILYSAFETYCHECK"]["ACTIVE"] = "1"
+	$ChangedSettings['DSC_Checks'] = 'Enabled'
 	$ConfigChanged = $true
 	$settingsChanged = $true
 }
 
 If ($settingsContent["DAILYSAFETYCHECK"]["HOUR"] -ne $DSCHour) {
 	$settingsContent["DAILYSAFETYCHECK"]["HOUR"] = $DSCHour
+	$ChangedSettings['DSC_Hour'] = $DSCHour
 	$ConfigChanged = $true
 	$settingsChanged = $true
 }
@@ -867,7 +916,7 @@ If (("All", "Default" -contains $WinServiceCheck) -and ($AgentMode -eq "server")
 		
 		Foreach ($service in $autorunsvc) {
 			If (($servicesContent["SERVICES"][$service.Name] -eq "1") -or ($AlwaysMonitorServices -contains $service.Name)) {
-				$ServicesToMonitor += $service.Name
+				$ServicesToMonitor += $service
 			}
 		}
 	} Else { 
@@ -1032,7 +1081,7 @@ If ($Backup) {
 				"Veeam" {
 					Add-PSSnapin VeeamPSSnapin -ErrorAction SilentlyContinue
 					If ((Get-PSSnapin "*Veeam*" -ErrorAction SilentlyContinue) -eq $null){ 
-						Write-Host "Unable to load Veeam snapin, you must run this on your Veeam backup server, and the Powershell snapin must be installed.`n`n"
+						Output-Host "Unable to load Veeam snapin, you must run this on your Veeam backup server, and the Powershell snapin must be installed.`n`n"
 					} Else {
 						$JobCount = (Get-VBRJob|select Name).Count
 					}
@@ -1169,21 +1218,25 @@ If ($ConfigChanged) {
 			Exit 1001 # Internal status code: Changes made
 		}
 	} Else {
-		Write-Host "Recommended changes:"
+		Output-Host "Recommended changes:"
 
 		If ($RemoveChecks.Count -gt 0) {
-			Write-Host "Checks to be removed:"
+			Output-Host "Checks to be removed:"
 			Format-Output $RemoveChecks 
 		}
 		If ($NewChecks.Count -gt 0) {
-			Write-Host "Checks to be added:"
+			Output-Host "Checks to be added:"
 			Format-Output $NewChecks 
+		}
+		If ($ChangedSettings.Count -gt 0) {
+			Output-Host "Settings to be changed:"
+			$ChangedSettings
 		}
 		If (Test-Path $LastChangeFile) {
 			# Print last change to STDOUT
-			Write-Host "------------------------------------------------------"
+			Output-Host "------------------------------------------------------"
 			Get-Content $LastChangeFile
-			Write-Host "------------------------------------------------------"
+			Output-Host "------------------------------------------------------"
 		}
 		If ($ReportMode) {
 			Exit 0 # Needed changes have been reported, but do not fail the check
@@ -1193,22 +1246,22 @@ If ($ConfigChanged) {
 	}
 } Else {
 	# We have nothing to do. This Device has passed the test!
-	Write-Host "Current Configuration Verified  - OK:"
-	If ($Performance) 		{ Write-Host "Performance Monitoring checks verified: OK"}
-	If ($DriveSpaceCheck) 	{ Write-Host "Disk usage monitored on all harddrives: OK"}
-	If ($WinServiceCheck) 	{ Write-Host "All Windows services are now monitored: OK"}
-	If ($DiskSpaceChange) 	{ Write-Host "Disk space change harddrives monitored: OK"}
-	If ($PingCheck) 		{ Write-Host "Pingcheck Router Next Hop check tested: OK"}
-	If ($SqlInstances.count -gt 0) { Write-Host "SQL Server installed:"; $SqlInstances }
-	If ($SMART) 			{ Write-Host "Physical Disk Health monitoring tested: OK"}
-	If ($Backup) 			{ Write-Host "Unmonitored Backup Products not found: OK"}
-	If ($Antivirus) 		{ Write-Host "Unmonitored Antivirus checks verified: OK"}
-	Write-Host "All checks verified. Nothing has been changed."
+	Output-Host "Current Configuration Verified  - OK:"
+	If ($Performance) 		{ Output-Host "Performance Monitoring checks verified: OK"}
+	If ($DriveSpaceCheck) 	{ Output-Host "Disk usage monitored on all harddrives: OK"}
+	If ($WinServiceCheck) 	{ Output-Host "All Windows services are now monitored: OK"}
+	If ($DiskSpaceChange) 	{ Output-Host "Disk space change harddrives monitored: OK"}
+	If ($PingCheck) 		{ Output-Host "Pingcheck Router Next Hop check tested: OK"}
+	If ($SqlInstances.count -gt 0) { Output-Host "SQL Server installed:"; $SqlInstances }
+	If ($SMART) 			{ Output-Host "Physical Disk Health monitoring tested: OK"}
+	If ($Backup) 			{ Output-Host "Unmonitored Backup Products not found: OK"}
+	If ($Antivirus) 		{ Output-Host "Unmonitored Antivirus checks verified: OK"}
+	Output-Host "All checks verified. Nothing has been changed."
 	If (Test-Path $LastChangeFile) {
 		# Print last change to STDOUT
-		Write-Host "------------------------------------------------------"
+		Output-Host "------------------------------------------------------"
 		Get-Content $LastChangeFile
-		Write-Host "------------------------------------------------------"
+		Output-Host "------------------------------------------------------"
 	}
 	# Try to make Windows autostart monitoring agent if it fails
 	# Try to read the FailureActions property of Advanced Monitoring Agent
