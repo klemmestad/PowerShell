@@ -7,3 +7,6 @@ VERSION HISTORY
 	parameter validation.
 
 	Removed bug in parsing of Windows services if using "Default" as option.
+
+1.2	MODIFICATION
+	-Debug now implies -Verbose.

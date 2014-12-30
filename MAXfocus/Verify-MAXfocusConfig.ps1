@@ -21,7 +21,7 @@
 .LINK
    https://www.maxfocus.com/remote-management/automated-maintenance
 .VERSION
-   1.1
+   1.2
 .FUNCTIONALITY
    When the script finds that checks has to be added it will create valid XML
    entries and add them to agent configuration files. It uses Windows scheduled
@@ -53,6 +53,7 @@ param (
 	[switch]$Library = $false # Used to source this script for its functions
 )
 
+If ($Debug) { $Verbose = $true}
 
 # Enhanced Output-Host function to capture log info
 function Output-Host  {
