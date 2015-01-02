@@ -10,3 +10,10 @@ VERSION HISTORY
 
 1.2	MODIFICATION
 	-Debug now implies -Verbose.
+	
+1.21 BUGFIX AND MODIFICATION
+	 I took module PSScheduledJob for granted. That was wrong. I have added code to detect
+	 If the module is available. If it is, it will be used. If not I fall back to hard
+	 restart of the agent service.
+	 
+	 Copied LastChangeLog functionality from Verify-MAXfocusConfig.

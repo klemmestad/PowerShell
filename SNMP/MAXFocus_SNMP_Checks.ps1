@@ -1,4 +1,4 @@
-﻿ <#
+﻿<#
 .DESCRIPTION
 	Scan an SNMP target for known OIDs with values.
 	Add SNMP checks to agent.
@@ -10,7 +10,7 @@
 .LINK
    http://klemmestad.com/2014/12/10/add-snmp-checks-to-maxfocus-automatically/
 .VERSION
-   1.10
+   1.11
 #>
 
 # Using [string] for almost all parameters to avoid parameter validation fail
@@ -316,6 +316,7 @@ $Sets = @("247")
 # Other Pathnames
 $IniFile = $gfimaxpath + "\settings.ini"
 $ScriptLib = $gfimaxpath + "\scripts\lib"
+$LastChangeFile = $gfimaxpath + "\LastSNMPChange.log"
 $ConfigChanged = $false
 
 # Read ini-files
@@ -507,28 +508,36 @@ If($NewChecks[0])
 		# Save all config files
 		$XmlConfig["247"].Save($XmlFile["247"])
 		
-		
-		# Restart monitoring agent with a scheduled task with 2 minutes delay.
-		# Register a new task if it does not exist, set a new trigger if it does.
-		Import-Module PSScheduledJob
-		$JobTime = (Get-Date).AddMinutes(2)
-		$JobTrigger = New-JobTrigger -Once -At $JobTime.ToShortTimeString()
-		$JobOption = New-ScheduledJobOption -StartIfOnBattery -RunElevated 
-		$RegisteredJob = Get-ScheduledJob -Name RestartAdvancedMonitoringAgent -ErrorAction SilentlyContinue
-		If ($RegisteredJob) {
-			Set-ScheduledJob $RegisteredJob -Trigger $JobTrigger
+		# Check if PSScheduledJob module is available. Use delayed restart of agent if it does.
+		If ($PSVersionTable.PSVersion.Major -gt 2) { 
+			# Restart monitoring agent with a scheduled task with 2 minutes delay.
+			# Register a new task if it does not exist, set a new trigger if it does.
+			Import-Module PSScheduledJob
+			$JobTime = (Get-Date).AddMinutes(2)
+			$JobTrigger = New-JobTrigger -Once -At $JobTime.ToShortTimeString()
+			$JobOption = New-ScheduledJobOption -StartIfOnBattery -RunElevated 
+			$RegisteredJob = Get-ScheduledJob -Name RestartAdvancedMonitoringAgent -ErrorAction SilentlyContinue
+			If ($RegisteredJob) {
+				Set-ScheduledJob $RegisteredJob -Trigger $JobTrigger
+			} Else {
+				Register-ScheduledJob -Name RestartAdvancedMonitoringAgent -ScriptBlock { Restart-Service 'Advanced Monitoring Agent' } -Trigger $JobTrigger -ScheduledJobOption $JobOption
+			}		
 		} Else {
-			Register-ScheduledJob -Name RestartAdvancedMonitoringAgent -ScriptBlock { Restart-Service 'Advanced Monitoring Agent' } -Trigger $JobTrigger -ScheduledJobOption $JobOption
-		}		
-		
-		# Write output to Dashboard
-		Output-Host "Checks added:"
-		If ($NewChecks) 
-		{
-			ForEach ($Check in $NewChecks) {
-				Output-Host $Check["product"]
-			}
+		    # No scheduled job control available
+		    # Restart the hard way
+		    Restart-Service 'Advanced Monitoring Agent'
 		}
+		# Write output to $LastChangeFile
+		# Overwrite file with first command
+		"Last Change applied {0}:" -f $(Get-Date) | Out-File $LastChangeFile
+		"------------------------------------------------------" | Out-File -Append $LastChangeFile
+		If ($NewChecks) {
+			"`nAdded the following checks to configuration file:" | Out-File -Append $LastChangeFile
+			ForEach ($Check in $NewChecks) {
+				$Check["product"] | Out-File -Append $LastChangeFile
+			}
+		}	
+
 		If ($ReportMode) {
 			Exit 0 # Needed changes have been reported, but do not fail the check
 		} Else {
@@ -542,6 +551,12 @@ If($NewChecks[0])
 				Output-Host $Check["product"]
 			}
 		}
+		If (Test-Path $LastChangeFile) {
+			# Print last change to STDOUT
+			Output-Host "------------------------------------------------------"
+			Get-Content $LastChangeFile
+			Output-Host "------------------------------------------------------"
+		}
 		If ($ReportMode) {
 			Exit 0 # Needed changes have been reported, but do not fail the check
 		} Else {
@@ -551,5 +566,11 @@ If($NewChecks[0])
 } Else {
 	# We have nothing to do. 
 	Output-Host "Nothing to do."
+	If (Test-Path $LastChangeFile) {
+		# Print last change to STDOUT
+		Output-Host "------------------------------------------------------"
+		Get-Content $LastChangeFile
+		Output-Host "------------------------------------------------------"
+	}
 	Exit 0 # SUCCESS
 }

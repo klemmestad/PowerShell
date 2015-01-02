@@ -21,7 +21,7 @@
 .LINK
    https://www.maxfocus.com/remote-management/automated-maintenance
 .VERSION
-   1.2
+   1.21
 .FUNCTIONALITY
    When the script finds that checks has to be added it will create valid XML
    entries and add them to agent configuration files. It uses Windows scheduled
@@ -1189,18 +1189,6 @@ If ($ConfigChanged) {
 		}
 		Out-IniFile $settingsContent $IniFile
 		
-		# Restart monitoring agent with a scheduled task with 2 minutes delay.
-		# Register a new task if it does not exist, set a new trigger if it does.
-		Import-Module PSScheduledJob
-		$JobTime = (Get-Date).AddMinutes(2)
-		$JobTrigger = New-JobTrigger -Once -At $JobTime.ToShortTimeString()
-		$JobOption = New-ScheduledJobOption -StartIfOnBattery -RunElevated 
-		$RegisteredJob = Get-ScheduledJob -Name RestartAdvancedMonitoringAgent -ErrorAction SilentlyContinue
-		If ($RegisteredJob) {
-			Set-ScheduledJob $RegisteredJob -Trigger $JobTrigger
-		} Else {
-			Register-ScheduledJob -Name RestartAdvancedMonitoringAgent -ScriptBlock { Restart-Service 'Advanced Monitoring Agent' } -Trigger $JobTrigger -ScheduledJobOption $JobOption
-		}		
 		# Write output to $LastChangeFile
 		# Overwrite file with first command
 		"Last Change applied {0}:" -f $(Get-Date) | Out-File $LastChangeFile
@@ -1212,7 +1200,28 @@ If ($ConfigChanged) {
 		If ($NewChecks.Count -gt 0) {
 			"`nAdded the following checks to configuration file:" | Out-File -Append $LastChangeFile
 			Format-Output $NewChecks | Out-File -Append $LastChangeFile
+		}	
+		
+		# Check if PSScheduledJob module is available. Use delayed restart of agent if it does.
+		If ($PSVersionTable.PSVersion.Major -gt 2) { 
+			# Restart monitoring agent with a scheduled task with 2 minutes delay.
+			# Register a new task if it does not exist, set a new trigger if it does.
+			Import-Module PSScheduledJob
+			$JobTime = (Get-Date).AddMinutes(2)
+			$JobTrigger = New-JobTrigger -Once -At $JobTime.ToShortTimeString()
+			$JobOption = New-ScheduledJobOption -StartIfOnBattery -RunElevated 
+			$RegisteredJob = Get-ScheduledJob -Name RestartAdvancedMonitoringAgent -ErrorAction SilentlyContinue
+			If ($RegisteredJob) {
+				Set-ScheduledJob $RegisteredJob -Trigger $JobTrigger
+			} Else {
+				Register-ScheduledJob -Name RestartAdvancedMonitoringAgent -ScriptBlock { Restart-Service 'Advanced Monitoring Agent' } -Trigger $JobTrigger -ScheduledJobOption $JobOption
+			}		
+		} Else {
+		    # No scheduled job control available
+		    # Restart the hard way
+		    Restart-Service 'Advanced Monitoring Agent'
 		}
+
 		If ($ReportMode) {
 			Exit 0 # Needed changes have been reported, but do not fail the check
 		} Else {
