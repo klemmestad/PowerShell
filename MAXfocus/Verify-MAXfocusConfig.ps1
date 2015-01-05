@@ -21,7 +21,7 @@
 .LINK
    https://www.maxfocus.com/remote-management/automated-maintenance
 .VERSION
-   1.21
+   1.22
 .FUNCTIONALITY
    When the script finds that checks has to be added it will create valid XML
    entries and add them to agent configuration files. It uses Windows scheduled

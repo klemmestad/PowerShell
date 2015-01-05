@@ -10,7 +10,7 @@
 .LINK
    http://klemmestad.com/2014/12/10/add-snmp-checks-to-maxfocus-automatically/
 .VERSION
-   1.11
+   1.12
 #>
 
 # Using [string] for almost all parameters to avoid parameter validation fail
