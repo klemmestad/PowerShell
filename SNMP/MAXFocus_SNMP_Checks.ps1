@@ -509,7 +509,9 @@ If($NewChecks[0])
 		$XmlConfig["247"].Save($XmlFile["247"])
 		
 		# Check if PSScheduledJob module is available. Use delayed restart of agent if it does.
-		If ($PSVersionTable.PSVersion.Major -gt 2) { 
+		Try { 
+			Output-Debug 'Trying to restart agent using PSScheduledJob'
+			$ErrorActionPreference = 'Stop'
 			# Restart monitoring agent with a scheduled task with 2 minutes delay.
 			# Register a new task if it does not exist, set a new trigger if it does.
 			Import-Module PSScheduledJob
@@ -521,15 +523,20 @@ If($NewChecks[0])
 				Set-ScheduledJob $RegisteredJob -Trigger $JobTrigger
 			} Else {
 				Register-ScheduledJob -Name RestartAdvancedMonitoringAgent -ScriptBlock { Restart-Service 'Advanced Monitoring Agent' } -Trigger $JobTrigger -ScheduledJobOption $JobOption
-			}		
-		} Else {
+			}	
+			$RestartMethod = 'PSScheduledJob'
+		} Catch {
+			Output-Debug 'EXCEPTION: PSScheduledJob not available. Using Restart-Service.'
 		    # No scheduled job control available
 		    # Restart the hard way
 		    Restart-Service 'Advanced Monitoring Agent'
+			$RestartMethod = 'Restart-Service'
+		} Finally {
+			$ErrorActionPreference = 'Continue'
 		}
 		# Write output to $LastChangeFile
 		# Overwrite file with first command
-		"Last Change applied {0}:" -f $(Get-Date) | Out-File $LastChangeFile
+		"Last Change applied {0} (Restarted using {1}):" -f $(Get-Date), $RestartMethod | Out-File $LastChangeFile
 		"------------------------------------------------------" | Out-File -Append $LastChangeFile
 		If ($NewChecks) {
 			"`nAdded the following checks to configuration file:" | Out-File -Append $LastChangeFile

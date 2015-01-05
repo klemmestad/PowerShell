@@ -1203,7 +1203,8 @@ If ($ConfigChanged) {
 		}	
 		
 		# Check if PSScheduledJob module is available. Use delayed restart of agent if it does.
-		If ($PSVersionTable.PSVersion.Major -gt 2) { 
+		Try {
+			$ErrorActionPreference = 'Stop'
 			# Restart monitoring agent with a scheduled task with 2 minutes delay.
 			# Register a new task if it does not exist, set a new trigger if it does.
 			Import-Module PSScheduledJob
@@ -1216,10 +1217,12 @@ If ($ConfigChanged) {
 			} Else {
 				Register-ScheduledJob -Name RestartAdvancedMonitoringAgent -ScriptBlock { Restart-Service 'Advanced Monitoring Agent' } -Trigger $JobTrigger -ScheduledJobOption $JobOption
 			}		
-		} Else {
+		} Catch {
 		    # No scheduled job control available
 		    # Restart the hard way
 		    Restart-Service 'Advanced Monitoring Agent'
+		} Finally {
+			$ErrorActionPreference = 'Continue'
 		}
 
 		If ($ReportMode) {
