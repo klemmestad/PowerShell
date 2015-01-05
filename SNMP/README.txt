@@ -38,3 +38,9 @@ VERSION HISTORY
 	capture output. It always appends a parameter -logfile. This parameter MUST
 	be accepted by the script, or the script will fail silently (no output to
 	Dashboard).
+1.11	FEATURE
+	Fall back to Restart-Service if Powershell version < v3
+
+1.12 	BUGFIX
+	Not all machines with powershell version 3 has PSScheduledJob! Switched from
+	version check to Try-Catch.
