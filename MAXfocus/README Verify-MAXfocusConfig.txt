@@ -12,8 +12,17 @@ VERSION HISTORY
 	-Debug now implies -Verbose.
 	
 1.21 BUGFIX AND MODIFICATION
-	 I took module PSScheduledJob for granted. That was wrong. I have added code to detect
-	 If the module is available. If it is, it will be used. If not I fall back to hard
-	 restart of the agent service.
+	I took module PSScheduledJob for granted. That was wrong. I have added code to detect
+	If the module is available. If it is, it will be used. If not I fall back to hard
+	restart of the agent service.
 	 
-	 Copied LastChangeLog functionality from Verify-MAXfocusConfig.
+1.22 BUGFIX
+	Not all devices with Powershell v3 has PSScheduledJob. I am loath to use 
+	Get-Module -ListAvailable because it is way to slow. I use Try-Catch to fail
+	silently back to Restart-Service without too much cost.
+
+1.23 BUGFIX AND MODIFICATION
+	Added text "PARAMETER: " as prefix to verbose out put for parameter validation.
+
+	Fixed sc.exe parameters. Using a fixed interval for all devices to avoid variable 
+	parsing errors.

@@ -85,7 +85,7 @@ function Output-Verbose {
 
 If ($All)
 {
-	Output-Verbose "-All detected. Loading default values."
+	Output-Verbose "Parameter -All detected. Loading default values."
 	## DEFAULT CHECKS
 	$Performance = $true # Set to $false if you do not want performance checks
 	$PingCheck = $false # This is useful on a Fault History report. Otherwise useless.
@@ -111,7 +111,7 @@ If ($ReportMode -Match 'On') {
 
 # Test DriveSpaceCheck
 If (($DriveSpaceCheck) -and ($DriveSpaceCheck -match '\d+(%|MB|GB)$')) {
-	Output-Verbose ('-DrivespaceCheck {0} validated OK.' -f $DriveSpaceCheck)
+	Output-Verbose ('Parameter -DrivespaceCheck {0} validated OK.' -f $DriveSpaceCheck)
 } ElseIf ($DriveSpaceCheck) {
 	Output-Host ('ERROR: -DriveSpaceCheck {0} could not be validated. Use 10%, 10MB or 10GB where "10" is any integer.' -f $DriveSpaceCheck)
 	Output-Host 'WARNING: Ignoring -DriveSpaceCheck.'
@@ -120,7 +120,7 @@ If (($DriveSpaceCheck) -and ($DriveSpaceCheck -match '\d+(%|MB|GB)$')) {
 
 # Test WinServiceCheck
 If (($WinServiceCheck) -and ('All', 'Default', 'DefaultOnly' -contains $WinServiceCheck)) {
-	Output-Verbose ('-WinServiceCheck {0} validated OK.' -f $WinServiceCheck)
+	Output-Verbose ('Parameter  -WinServiceCheck {0} validated OK.' -f $WinServiceCheck)
 } ElseIf ($WinServiceCheck) {
 	Output-Host ('ERROR: -WinServiceCheck {0} could not be validated. Use All, Default or DefaultOnly' -f $WinServiceCheck)
 	Output-Host 'WARNING: Ignoring -WinServiceCheck.'
@@ -133,7 +133,7 @@ If ($DiskSpaceChange) {
 	$isNum = [System.Int32]::TryParse($DiskSpaceChange, [ref]$x2)
 	If ($isNUM) {
 		[int]$DiskSpaceChange = $DiskSpaceChange
-		Output-Verbose ("-DiskSpaceChange {0} validated OK." -f $DiskSpaceChange)
+		Output-Verbose ("Parameter -DiskSpaceChange {0} validated OK." -f $DiskSpaceChange)
 	} Else {
 		Output-Host ("ERROR: -DiskSpaceChange {0} could not be validated. Use a valid integer." -f $DiskSpaceChange)
 		Output-Host 'WARNING: Ignoring -DiskSpaceChange.'
@@ -143,7 +143,7 @@ If ($DiskSpaceChange) {
 
 # Test ServerInterval
 If ("5", "15" -contains $ServerInterval) {
-	Output-Verbose ('-ServerInterval {0} validated OK.' -f $ServerInterval)
+	Output-Verbose ('Parameter -ServerInterval {0} validated OK.' -f $ServerInterval)
 } Else {
 	Output-Host ('ERROR: -ServerInterval {0} could not be validated. Use 5 or 15.' -f $ServerInterval)
 	Output-Host 'WARNING: Setting value of -ServerInterval to default of 15.'
@@ -152,7 +152,7 @@ If ("5", "15" -contains $ServerInterval) {
 
 # Test PCInterval
 If ("30", "60" -contains $PCInterval) {
-	Output-Verbose ('-PCInterval {0} validated OK.' -f $PCInterval)
+	Output-Verbose ('Parameter -PCInterval {0} validated OK.' -f $PCInterval)
 } Else {
 	Output-Host ('ERROR: -PCInterval {0} could not be validated. Use 30 or 60.' -f $PCInterval)
 	Output-Host 'WARNING: Setting value of -PCInterval to default of 60.'
@@ -164,7 +164,7 @@ If ($DSChour) {
 	$x2 = 0
 	$isNum = [System.Int32]::TryParse($DSChour, [ref]$x2)
 	If (($isNUM) -and ($x2 -ge 0 -and $x2 -lt 24)) {
-		Output-Verbose ("-DSChour {0} validated OK." -f $DSChour)
+		Output-Verbose ("Parameter -DSChour {0} validated OK." -f $DSChour)
 	} Else {
 		Output-Host ("ERROR: -DSChour {0} could not be validated. Use a valid number between 0 (12 AM) and 23 (11 PM)." -f $DSChour)
 		Output-Host 'WARNING: Setting value of -DSChour to default of 8.'
@@ -173,8 +173,9 @@ If ($DSChour) {
 }
 
 # Set strict mode if running interactively. Very useful when testing new code
-If ($MyInvocation.MyCommand.Name -eq 'Verify-MAXfocusConfig.ps1') {
-	Output-Host "WARNING: Running Interactively. Using Strict Mode."
+If (!((Get-WmiObject Win32_Process -Filter "ProcessID=$PID").CommandLine -match '-noni')) {
+	Output-Debug "WARNING: Running Interactively. Using Strict Mode."
+	Write-Warning "Running Interactively. Using Strict Mode."
 	Set-StrictMode -Version 2
 }
 
@@ -1282,9 +1283,8 @@ If ($ConfigChanged) {
 	$FailureActions = Get-ItemProperty "HKLM:\System\CurrentControlSet\Services\Advanced Monitoring Agent" FailureActions -ErrorAction SilentlyContinue
 	If (!($FailureActions)) {
 		# Reset count every 24 hours, restart service after twice the 247Interval minutes
-		[int]$restartdelay = 120000 * $247Interval 
 		$servicename = $gfimaxagent.Name
-		sc.exe failure "$servicename" reset=86400 actions= restart/$restartdelay
+		&sc.exe failure "$servicename" reset=86400 actions=restart/600000
 	}
 	Exit 0 # SUCCESS
 }
