@@ -18,7 +18,7 @@ param (
 	[switch]$ReportMode = $true,
 	[string]$User = "root", 
 	[string]$Pass = "vmware",
-	[string]$Hosts = ""
+	[array]$Hosts = ""
 )
 ## Constants
 # May need updating from time to time
@@ -28,31 +28,31 @@ param (
 $Scripts = @{
 	"script_1024_28.vbs" = @{
 		"arguments" = "";
-		"url" = "https://www.dropbox.com/s/5j056a0c92bk452/script_1024_28.vbs?dl=1" };
+		"url" = "https://raw.githubusercontent.com/klemmestad/PowerShell/master/Resources/script_1024_28.vbs" };
 	"script_1024_29.vbs" = @{
 		"arguments" = "";
-		"url" = "https://www.dropbox.com/s/yz1ynvgxhtqsu6h/script_1024_29.vbs?dl=1" };
+		"url" = "https://raw.githubusercontent.com/klemmestad/PowerShell/master/Resources/script_1024_29.vbs" };
 	"script_1024_30.vbs" = @{
 		"arguments" = "";
-		"url" = "https://www.dropbox.com/s/zjhg0tv3ou2gt5y/script_1024_30.vbs?dl=1" };
+		"url" = "https://raw.githubusercontent.com/klemmestad/PowerShell/master/Resources/script_1024_30.vbs" };
 	"script_1024_32.vbs" = @{
 		"arguments" = "";
-		"url" = "https://www.dropbox.com/s/rad6pf77f9u4m30/script_1024_32.vbs?dl=1" };
+		"url" = "https://raw.githubusercontent.com/klemmestad/PowerShell/master/Resources/script_1024_32.vbs" };
 	"script_1024_33.vbs" = @{
 		"arguments" = "";
-		"url" = "https://www.dropbox.com/s/f2x5wfc6kccvnvm/script_1024_33.vbs?dl=1" };
+		"url" = "https://raw.githubusercontent.com/klemmestad/PowerShell/master/Resources/script_1024_33.vbs" };
 	"script_1024_34.ps1" = @{
 		"arguments" = "";
-		"url" = "https://www.dropbox.com/s/a2rv0l8pulorc42/script_1024_34.ps1?dl=1" };
+		"url" = "https://raw.githubusercontent.com/klemmestad/PowerShell/master/Resources/script_1024_34.ps1" };
 	"script_1024_35.ps1" = @{
 		"arguments" = " -vmname ""*""";
-		"url" = "https://www.dropbox.com/s/m80qbif1slx3hgu/script_1024_35.ps1?dl=1" };
+		"url" = "https://raw.githubusercontent.com/klemmestad/PowerShell/master/Resources/script_1024_35.ps1" };
 	"script_1024_38.ps1" = @{
 		"arguments" = " -datastorename ""*"" -units ""GB"" -threshold ""20""";
-		"url" = "https://www.dropbox.com/s/0m6qpugu2pegt4b/script_1024_38.ps1?dl=1" };
+		"url" = "https://raw.githubusercontent.com/klemmestad/PowerShell/master/Resources/script_1024_38.ps1" };
 	"script_1024_39.ps1" = @{
 		"arguments" = "";
-		"url" = "https://www.dropbox.com/s/k4iqpf4fu47gf52/script_1024_39.ps1?dl=1" };
+		"url" = "https://raw.githubusercontent.com/klemmestad/PowerShell/master/Resources/script_1024_39.ps1" };
 }
 
 $DefaultChecks =  @(
@@ -138,9 +138,11 @@ function Get-GFIMAXChecks ($xmlArray, $property) {
 }
 
 function Format-Output ($ArrayOfHash) {
+	$Result = @()
 	ForEach ($Check in $ArrayOfHash) {
-		Write-Host $Check["description"] $Check["arguments"]#.Split(" ")[1]
+		$Result += '{0,-40} {1}' -f $Check["description"], $Check["arguments"]#.Split(" ")[1]
 	}
+	Return $Result
 }
 
 function Make-ScriptAvailable ([string]$ScriptName) {
@@ -228,11 +230,13 @@ $Sets = @("247", "DSC")
 $IniFile = $gfimaxpath + "\settings.ini"
 $ScriptDir = $gfimaxpath + "\scripts\"
 $ScriptLib = $ScriptDir + "lib\"
+$LastChangeFile = $gfimaxpath + "\LastChangeToVMwareChecks.log"
 
 $ConfigChanged = $false
 
 $webclient = New-Object System.Net.WebClient
-[System.Net.ServicePointManager]::securityProtocol = 'ssl3'
+# Must use TLS with GitHub because of POODLE modifications serverside
+[System.Net.ServicePointManager]::SecurityProtocol = 'Tls12'
 
 # Read ini-files
 $settingsContent = Get-IniContent($IniFile)
@@ -242,7 +246,6 @@ If (!(Test-Path -PathType Container $ScriptLib)) {
 }
 
 $PSSnapinVMware = $false
-$PowerCli = "https://www.dropbox.com/s/331nzom43zstpx3/VMware-PowerCLI-5.0.0-435426.exe?dl=1"
 $sSnapInName = 'VMware.VimAutomation.Core'
 foreach( $oSnapIn in Get-PSSnapIn -Registered ) {
 	if( $oSnapIn.Name -eq $sSnapInName ) {
@@ -251,18 +254,6 @@ foreach( $oSnapIn in Get-PSSnapIn -Registered ) {
 	}
 }
 
-#If (!($PSSnapinVMware))
-#{
-#	$PowerCliExe = $ScriptLib + "VMware-PowerCLI.exe"
-#	
-#	$webclient.DownloadFile($PowerCli,$PowerCliExe)
-#	&$PowerCliExe /s /v /qn
-#	If ($LASTEXITCODE -eq 1)
-#	{
-#		$PSSnapinVMware = $true
-#	}
-#}
-#
 
 # Read configuration of checks. Create an XML object if they do not exist yet.
 ForEach ($Set in $Sets) {
@@ -281,12 +272,28 @@ ForEach ($Set in $Sets) {
 	}
 }
 
-
-[array]$EsxHosts = @([regex]::Split($Hosts,"[,\s]"))
-
-
+# Verify that hostnames are resolvable
+$EsxHosts = @()
 $CurrentChecks = Get-GFIMAXChecks ($XmlConfig.Values | % { $_.checks.ScriptCheck }) scriptname
-ForEach ($EsxHost in $EsxHosts) {
+Foreach ($EsxHost in $Hosts) {
+	# Create REF variable of correct type
+	$ip = [System.Net.IPAddress]::Parse("127.0.0.1")
+	# Try to parse $EsxHost as IP address
+	If (!([System.Net.IPAddress]::TryParse($EsxHost, [ref] $ip))) {
+		# $EsxHost is not a valid IP address. Maybe it is a hostname?
+		Try {
+			 $ip = [System.Net.Dns]::GetHostAddresses($EsxHost)[0]
+			 # Use IPv4 for 'localhost'
+			 If ($ip -eq "::1") { $ip = [System.Net.IPAddress]::Parse("127.0.0.1") }
+		} Catch {
+			Write-Host ("ERROR: Could not resolve hostname ""{0}""" -f $EsxHost)
+			Continue
+		}
+		Write-Host ('Resolved {0} to IP address {1}.' -f $EsxHost, $ip)
+	} 
+	
+	Write-Host ('Processing Checks for host {0}.' -f $EsxHost)
+	$CurrentCount = $NewChecks.Count
 	Foreach ($Check in $DefaultChecks) {
 		# The name of the script is important. 
 		$ScriptName = $Check.scriptname
@@ -322,6 +329,11 @@ ForEach ($EsxHost in $EsxHosts) {
 			"timeout" = $Check.timeout
 		}
 		$NewChecks += $NewCheck
+	}
+	If ($NewChecks.Count -gt $CurrentCount) {
+		Write-Host ('New checks found for {0}.' -f $EsxHost)
+	} Else {
+		Write-Host ('No new checks found for {0}.' -f $EsxHost)
 	}
 }
 
@@ -376,12 +388,15 @@ If($ConfigChanged) {
 		# Start monitoring agent again
 		Start-Service $gfimaxagent.Name
 		
-		# Write output to Dashboard
-		Write-Host "CHANGES APPLIED:"
-		If ($NewChecks) {
-			Write-Host "Added the following checks to configuration file:"
-			Format-Output $NewChecks 
-		}
+		# Write output to $LastChangeFile
+		# Overwrite file with first command
+		"Last Change applied {0}:" -f $(Get-Date) | Out-File $LastChangeFile
+		"------------------------------------------------------" | Out-File -Append $LastChangeFile
+		If ($NewChecks.Count -gt 0) {
+			"`nAdded the following checks to configuration file:" | Out-File -Append $LastChangeFile
+			Format-Output $NewChecks | Out-File -Append $LastChangeFile
+		}	
+
 		If ($ReportMode) {
 			Exit 0 # Needed changes have been reported, but do not fail the check
 		} Else {
@@ -394,6 +409,12 @@ If($ConfigChanged) {
 			Write-Host "You should add the following checks:"
 			Format-Output $NewChecks 
 		}
+		If (Test-Path $LastChangeFile) {
+			# Print last change to STDOUT
+			Write-Host "------------------------------------------------------"
+			Get-Content $LastChangeFile
+			Write-Host "------------------------------------------------------"
+		}
 		If ($ReportMode) {
 			Exit 0 # Needed changes have been reported, but do not fail the check
 		} Else {
@@ -403,5 +424,11 @@ If($ConfigChanged) {
 } Else {
 	# We have nothing to do. This Device has passed the test!
 	Write-Host "CHECKS VERIFIED"
+	If (Test-Path $LastChangeFile) {
+		# Print last change to STDOUT
+		Write-Host "------------------------------------------------------"
+		Get-Content $LastChangeFile
+		Write-Host "------------------------------------------------------"
+	}
 	Exit 0 # SUCCESS
 }
