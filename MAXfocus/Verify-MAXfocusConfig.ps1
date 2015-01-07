@@ -21,7 +21,7 @@
 .LINK
    https://www.maxfocus.com/remote-management/automated-maintenance
 .VERSION
-   1.22
+   1.24
 .FUNCTIONALITY
    When the script finds that checks has to be added it will create valid XML
    entries and add them to agent configuration files. It uses Windows scheduled
@@ -179,8 +179,40 @@ If (!((Get-WmiObject Win32_Process -Filter "ProcessID=$PID").CommandLine -match 
 	Set-StrictMode -Version 2
 }
 
-## VARIUS FUNCTIONS
-# 
+function Restart-MAXfocusService {
+	# Prepare restartscript
+	$RestartScriptContent = @"
+net stop "Advanced Monitoring Agent"
+net start "Advanced Monitoring Agent"
+"@
+	$RestartScript = $env:TEMP + "\RestartMAXfocusAgent.cmd"
+	$RestartScriptContent | Out-File -Encoding OEM $RestartScript
+	# Start time in the future
+	$JobTime = (Get-Date).AddMinutes(2)
+	$StartTime = Get-Date $JobTime -Format hh:mm
+	$TaskName = "Restart Advanced Monitoring Agent"
+	
+	Try {
+		$ErrorActionPreference = 'Stop'
+		# Check if tasks exists
+		$Result = &schtasks.exe /query /tn "$TaskName"
+		$Result = &schtasks.exe /run /TN "$TaskName"
+		
+	} Catch {
+		$ErrorActionPreference = 'Continue'
+		# Task does not exist
+		$Result = &schtasks.exe /Create /TN $TaskName /TR "$RestartScript" /RU SYSTEM /SC ONCE /ST $StartTime
+		Output-Debug "Restart task does not exist. Creating it."
+	}
+	# Restart the hard way if schtasks failed
+	If (!($Result -like 'SUCCESS:*')) {
+		Output-Debug "SCHTASKS.EXE failed. Restarting service the hard way."
+		Restart-Service 'Advanced Monitoring Agent'
+	}
+	
+	$ErrorActionPreference = 'Continue'
+}
+
 function New-MAXfocusCheck (
 	[string]$checktype, 
 	[string]$option1,
@@ -1203,29 +1235,8 @@ If ($ConfigChanged) {
 			Format-Output $NewChecks | Out-File -Append $LastChangeFile
 		}	
 		
-		# Check if PSScheduledJob module is available. Use delayed restart of agent if it does.
-		Try {
-			$ErrorActionPreference = 'Stop'
-			# Restart monitoring agent with a scheduled task with 2 minutes delay.
-			# Register a new task if it does not exist, set a new trigger if it does.
-			Import-Module PSScheduledJob
-			$JobTime = (Get-Date).AddMinutes(2)
-			$JobTrigger = New-JobTrigger -Once -At $JobTime.ToShortTimeString()
-			$JobOption = New-ScheduledJobOption -StartIfOnBattery -RunElevated 
-			$RegisteredJob = Get-ScheduledJob -Name RestartAdvancedMonitoringAgent -ErrorAction SilentlyContinue
-			If ($RegisteredJob) {
-				Set-ScheduledJob $RegisteredJob -Trigger $JobTrigger
-			} Else {
-				Register-ScheduledJob -Name RestartAdvancedMonitoringAgent -ScriptBlock { Restart-Service 'Advanced Monitoring Agent' } -Trigger $JobTrigger -ScheduledJobOption $JobOption
-			}		
-		} Catch {
-		    # No scheduled job control available
-		    # Restart the hard way
-		    Restart-Service 'Advanced Monitoring Agent'
-		} Finally {
-			$ErrorActionPreference = 'Continue'
-		}
-
+		Restart-MAXfocusService
+		
 		If ($ReportMode) {
 			Exit 0 # Needed changes have been reported, but do not fail the check
 		} Else {
