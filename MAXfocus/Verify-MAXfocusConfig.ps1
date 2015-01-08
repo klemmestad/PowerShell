@@ -181,36 +181,32 @@ If (!((Get-WmiObject Win32_Process -Filter "ProcessID=$PID").CommandLine -match 
 
 function Restart-MAXfocusService {
 	# Prepare restartscript
+	$RestartScript = $env:TEMP + "\RestartMAXfocusAgent.cmd"
 	$RestartScriptContent = @"
 net stop "Advanced Monitoring Agent"
 net start "Advanced Monitoring Agent"
+Del /F $RestartScript
 "@
-	$RestartScript = $env:TEMP + "\RestartMAXfocusAgent.cmd"
 	$RestartScriptContent | Out-File -Encoding OEM $RestartScript
 	# Start time in the future
 	$JobTime = (Get-Date).AddMinutes(2)
 	$StartTime = Get-Date $JobTime -Format hh:mm
 	$TaskName = "Restart Advanced Monitoring Agent"
-	
-	Try {
-		$ErrorActionPreference = 'Stop'
-		# Check if tasks exists
-		$Result = &schtasks.exe /query /tn "$TaskName"
+	$Result = &schtasks.exe /query /tn "$TaskName"
+	If ($Result) {
+		Output-Debug "Restarting Agent using existing scheduled task now."
 		$Result = &schtasks.exe /run /TN "$TaskName"
-		
-	} Catch {
-		$ErrorActionPreference = 'Continue'
-		# Task does not exist
+	} Else {
+		Output-Debug "Creating Scheduled Task. Agent will restart in 2 minutes."
 		$Result = &schtasks.exe /Create /TN $TaskName /TR "$RestartScript" /RU SYSTEM /SC ONCE /ST $StartTime
-		Output-Debug "Restart task does not exist. Creating it."
 	}
-	# Restart the hard way if schtasks failed
+		
 	If (!($Result -like 'SUCCESS:*')) {
 		Output-Debug "SCHTASKS.EXE failed. Restarting service the hard way."
 		Restart-Service 'Advanced Monitoring Agent'
 	}
 	
-	$ErrorActionPreference = 'Continue'
+	
 }
 
 function New-MAXfocusCheck (
