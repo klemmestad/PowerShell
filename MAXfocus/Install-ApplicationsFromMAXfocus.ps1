@@ -28,7 +28,7 @@
    1.0
 #>
 
-#Region Functions
+
 # We are only binding -logfile. Leave the rest unbound.
 param (	
 	# Make sure -logfile is NOT positional
@@ -39,42 +39,6 @@ param (
 	[Parameter(Position=0,ValueFromRemainingArguments=$true)]
 	[array]$Packages
 )
-
-function get-buffer { 
-  param( 
-    [int]$last = 50000,             # how many lines to get, back from current position 
-    [switch]$all                  # if true, get all lines in buffer 
-    ) 
-  $ui = $host.ui.rawui 
-  [int]$start = 0 
-  if ($all) {  
-    [int]$end = $ui.BufferSize.Height   
-    [int]$start = 0 
-  } 
-  else {  
-    [int]$end = $ui.CursorPosition.Y  
-    [int]$start = $end - $last 
-    if ($start -le 0) { $start = 0 } 
-  } 
-  $width = $ui.BufferSize.Width 
-  $height = $end - $start 
-  $dims = 0,$start,($width-1),($end-1) 
-  $rect = new-object Management.Automation.Host.Rectangle -argumentList $dims 
-  $cells = $ui.GetBufferContents($rect) 
- 
-  $line  = ""  
-  for ([int]$row=0; $row -lt $height; $row++ ) { 
-    for ([int]$col=0; $col -lt $width; $col++ ) { 
-      $cell = $cells[$row,$col] 
-      $ch = $cell.Character 
-      $line += $ch 
-    } 
-    $line.TrimEnd() # dump the line in the output pipe 
-    $line="" 
-  } 
-} 
-
-#EndRegion
 
 If (-not ($Packages)) {
 	Write-Host "No packages selected."
@@ -108,7 +72,6 @@ If (Test-Path $Choco) {
 		$ErrorActionPreference = 'Continue'
 		Write-Host "ERROR: Installing Chocolatey failed with error:"
 		Write-Host $_.Exception.Message
-		get-buffer
 		Exit 1001
 	}
 	$ErrorActionPreference = 'Continue'
@@ -117,7 +80,6 @@ If (Test-Path $Choco) {
 	} Else {
 		$ErrorActionPreference = 'Continue'
 		Write-Host "ERROR: Installation succeeded, but Chocolatey still not found! Exiting."
-		get-buffer
 		Exit 1001
 	}
 }
@@ -126,12 +88,12 @@ Write-Host "Verifying package installation:"
 
 $ErrorActionPreference = 'Stop'
 Try {
+	# The magic bit: Source chocolatey.ps1, don't fork processes with choco.exe.
 	. $Choco install @Packages
 } Catch {
 	$ErrorActionPreference = 'Continue'
 	Write-Host "ERROR: Package installation failed with error:"
 	Write-Host $_.Exception.Message
-	get-buffer 
 	Exit 1001
 }
 Exit 0
