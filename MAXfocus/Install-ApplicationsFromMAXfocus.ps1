@@ -31,33 +31,14 @@
 #Region Functions
 # We are only binding -logfile. Leave the rest unbound.
 param (	
+	# Make sure -logfile is NOT positional
 	[Parameter(Mandatory=$false)]
 	[string]$logfile = 'ScriptMicrosoftUpdate.log',
+	
+	# Capture entire parameterlist, save -logfile, as Packages
 	[Parameter(Position=0,ValueFromRemainingArguments=$true)]
 	[array]$Packages
 )
-
-$Debug = $true
-$DebugPreference = 'Continue'
-
-# Enhanced Output-Host function to capture log info
-function Output-Host  {
-	[string]$Text = ""
-	Foreach ($arg in $args) { $Text += $arg }
-	Write-Host $Text
-	# Include normal output in debug log
-	Output-Debug $Text
-}
-
-
-# Output text to $logfile if Debug set
-function Output-Debug  {
-	If ($Debug) {
-		[string]$Text = ''
-		Foreach ($arg in $args) { $Text += $arg }
-		('{0}: {1}' -f (Get-Date),$Text) | Out-File -Append $logfile
-	}
-}
 
 function get-buffer { 
   param( 
@@ -96,43 +77,43 @@ function get-buffer {
 #EndRegion
 
 If (-not ($Packages)) {
-	Output-Host "No packages selected."
-	Output-Host "USAGE:"
-	Output-Host "List package names as parameter to Check or Task."
-	Output-Host "See https://chocolatey.org/packages for available packages."
+	Write-Host "No packages selected."
+	Write-Host "USAGE:"
+	Write-Host "List package names as parameter to Check or Task."
+	Write-Host "See https://chocolatey.org/packages for available packages."
 	Exit 1001
 }
 
 $Choco = $env:ProgramData + "\chocolatey\chocolateyinstall\chocolatey.ps1"
 $Cup = $env:ProgramData + "\chocolatey\bin\cup.exe"
 If (Test-Path $Choco) {
-	Output-Host "Chocolatey is installed. Checking for new versions."
+	Write-Host "Chocolatey is installed. Checking for new versions."
 	$ErrorActionPreference = 'Stop'
 	Try {
 		&$Cup
 	} Catch {
 		$ErrorActionPreference = 'Continue'
-		Output-Host "ERROR: Updating Chocolatey failed with error:"
-		Output-Host $_.Exception.Message
+		Write-Host "ERROR: Updating Chocolatey failed with error:"
+		Write-Host $_.Exception.Message
 		Exit 1001
 	}
 	$ErrorActionPreference = 'Continue'
 
 } Else {
-	Output-Host "Chocolatey not installed. Trying to install."
+	Write-Host "Chocolatey not installed. Trying to install."
 	$ErrorActionPreference = 'Stop'
 	Try {
 		iex ((new-object net.webclient).DownloadString('https://chocolatey.org/install.ps1'))
 	} Catch {
 		$ErrorActionPreference = 'Continue'
-		Output-Host "ERROR: Installing Chocolatey failed with error:"
-		Output-Host $_.Exception.Message
+		Write-Host "ERROR: Installing Chocolatey failed with error:"
+		Write-Host $_.Exception.Message
 		get-buffer
 		Exit 1001
 	}
 	$ErrorActionPreference = 'Continue'
 	If (Test-Path $Choco) {
-		Output-Host "Chocolatey is installed. Proceeding."
+		Write-Host "Chocolatey is installed. Proceeding."
 	} Else {
 		$ErrorActionPreference = 'Continue'
 		Write-Host "ERROR: Installation succeeded, but Chocolatey still not found! Exiting."
@@ -141,15 +122,15 @@ If (Test-Path $Choco) {
 	}
 }
 
-Output-Host "Verifying package installation:"
+Write-Host "Verifying package installation:"
 
 $ErrorActionPreference = 'Stop'
 Try {
 	. $Choco install @Packages
 } Catch {
 	$ErrorActionPreference = 'Continue'
-	Output-Host "ERROR: Package installation failed with error:"
-	Output-Host $_.Exception.Message
+	Write-Host "ERROR: Package installation failed with error:"
+	Write-Host $_.Exception.Message
 	get-buffer 
 	Exit 1001
 }
