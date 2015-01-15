@@ -12,6 +12,9 @@ This script checks if IPMI is available and creates an event subscription if it 
 
 If no IPMI driver is avaiable, the script does nothing.
 
+## Install-ApplicationsFromMAXfocus.ps1
+Installs software silently on servers and workstations using Chocolatey. The script is to be uploaded to your dashboard account as a user script. It can run both as a script check and as a scheduled task. You list package names as parameter to script. Chocolatey will update packages that are already installed. 
+
 ## MAXfocus_PatchSettings.ps1
 A script that reads MAXfocus patchmanagement settings from a device and writes them back to the dashboard in a human-readable format.
 
