@@ -28,6 +28,7 @@
    1.0
 #>
 
+#Region Functions
 # We are only binding -logfile. Leave the rest unbound.
 param (	
 	[Parameter(Mandatory=$false)]
@@ -36,8 +37,8 @@ param (
 	[array]$Packages
 )
 
-
-
+$Debug = $true
+$DebugPreference = 'Continue'
 
 # Enhanced Output-Host function to capture log info
 function Output-Host  {
@@ -58,6 +59,42 @@ function Output-Debug  {
 	}
 }
 
+function get-buffer { 
+  param( 
+    [int]$last = 50000,             # how many lines to get, back from current position 
+    [switch]$all                  # if true, get all lines in buffer 
+    ) 
+  $ui = $host.ui.rawui 
+  [int]$start = 0 
+  if ($all) {  
+    [int]$end = $ui.BufferSize.Height   
+    [int]$start = 0 
+  } 
+  else {  
+    [int]$end = $ui.CursorPosition.Y  
+    [int]$start = $end - $last 
+    if ($start -le 0) { $start = 0 } 
+  } 
+  $width = $ui.BufferSize.Width 
+  $height = $end - $start 
+  $dims = 0,$start,($width-1),($end-1) 
+  $rect = new-object Management.Automation.Host.Rectangle -argumentList $dims 
+  $cells = $ui.GetBufferContents($rect) 
+ 
+  $line  = ""  
+  for ([int]$row=0; $row -lt $height; $row++ ) { 
+    for ([int]$col=0; $col -lt $width; $col++ ) { 
+      $cell = $cells[$row,$col] 
+      $ch = $cell.Character 
+      $line += $ch 
+    } 
+    $line.TrimEnd() # dump the line in the output pipe 
+    $line="" 
+  } 
+} 
+
+#EndRegion
+
 If (-not ($Packages)) {
 	Output-Host "No packages selected."
 	Output-Host "USAGE:"
@@ -66,7 +103,7 @@ If (-not ($Packages)) {
 	Exit 1001
 }
 
-$Choco = $env:ProgramData + "\chocolatey\bin\choco.exe"
+$Choco = $env:ProgramData + "\chocolatey\chocolateyinstall\chocolatey.ps1"
 $Cup = $env:ProgramData + "\chocolatey\bin\cup.exe"
 If (Test-Path $Choco) {
 	Output-Host "Chocolatey is installed. Checking for new versions."
@@ -74,6 +111,7 @@ If (Test-Path $Choco) {
 	Try {
 		&$Cup
 	} Catch {
+		$ErrorActionPreference = 'Continue'
 		Output-Host "ERROR: Updating Chocolatey failed with error:"
 		Output-Host $_.Exception.Message
 		Exit 1001
@@ -86,15 +124,19 @@ If (Test-Path $Choco) {
 	Try {
 		iex ((new-object net.webclient).DownloadString('https://chocolatey.org/install.ps1'))
 	} Catch {
+		$ErrorActionPreference = 'Continue'
 		Output-Host "ERROR: Installing Chocolatey failed with error:"
 		Output-Host $_.Exception.Message
+		get-buffer
 		Exit 1001
 	}
 	$ErrorActionPreference = 'Continue'
 	If (Test-Path $Choco) {
 		Output-Host "Chocolatey is installed. Proceeding."
 	} Else {
+		$ErrorActionPreference = 'Continue'
 		Write-Host "ERROR: Installation succeeded, but Chocolatey still not found! Exiting."
+		get-buffer
 		Exit 1001
 	}
 }
@@ -103,9 +145,12 @@ Output-Host "Verifying package installation:"
 
 $ErrorActionPreference = 'Stop'
 Try {
-	&$Choco install @Packages
+	. $Choco install @Packages
 } Catch {
+	$ErrorActionPreference = 'Continue'
 	Output-Host "ERROR: Package installation failed with error:"
 	Output-Host $_.Exception.Message
+	get-buffer 
 	Exit 1001
 }
+Exit 0
