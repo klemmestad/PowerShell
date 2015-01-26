@@ -28,7 +28,7 @@
    tasks to restart agent after the script completes.
 #>
 
-## SETTINGS
+#Region SETTINGS
 # A few settings are handled as parameters 
 param (	
 	[switch]$All = $false, # Accept all default check values in one go
@@ -178,8 +178,19 @@ If (!((Get-WmiObject Win32_Process -Filter "ProcessID=$PID").CommandLine -match 
 	Write-Warning "Running Interactively. Using Strict Mode."
 	Set-StrictMode -Version 2
 }
+#EndRegion
 
-function Restart-MAXfocusService {
+#Region Functions
+function Restart-MAXfocusService ([bool]$Safely=$true) {
+	If ($Safely) {	
+		# Update last runtime to prevent changes too often
+		[int]$currenttime = $(get-date -UFormat %s) -replace ",","." # Handle decimal comma 
+		$settingsContent["DAILYSAFETYCHECK"]["RUNTIME"] = $currenttime
+	}
+	# Clear lastcheckday to make DSC run immediately
+	$settingsContent["DAILYSAFETYCHECK"]["LASTCHECKDAY"] = "0"
+	Out-IniFile $settingsContent $IniFile
+		
 	# Prepare restartscript
 	$RestartScript = $env:TEMP + "\RestartMAXfocusAgent.cmd"
 	$RestartScriptContent = @"
@@ -189,17 +200,14 @@ Del /F $RestartScript
 "@
 	$RestartScriptContent | Out-File -Encoding OEM $RestartScript
 	# Start time in the future
-	$JobTime = (Get-Date).AddMinutes(2)
-	$StartTime = Get-Date $JobTime -Format hh:mm
+	$JobTime = (Get-Date).AddMinutes(-2)
+	$StartTime = Get-Date $JobTime -Format HH:mm
 	$TaskName = "Restart Advanced Monitoring Agent"
-	$Result = &schtasks.exe /query /tn "$TaskName"
+	$Result = &schtasks.exe /Create /TN $TaskName /TR "$RestartScript" /RU SYSTEM /SC ONCE /ST $StartTime /F
 	If ($Result) {
-		Output-Debug "Restarting Agent using existing scheduled task now."
+		Output-Debug "Restarting Agent using scheduled task now."
 		$Result = &schtasks.exe /run /TN "$TaskName"
-	} Else {
-		Output-Debug "Creating Scheduled Task. Agent will restart in 2 minutes."
-		$Result = &schtasks.exe /Create /TN $TaskName /TR "$RestartScript" /RU SYSTEM /SC ONCE /ST $StartTime
-	}
+	} 
 		
 	If (!($Result -like 'SUCCESS:*')) {
 		Output-Debug "SCHTASKS.EXE failed. Restarting service the hard way."
@@ -687,9 +695,12 @@ Function Is-SMARTavailable () {
     Return $True
 }
 
+#EndRegion
+
 ## Exit if sourced as Library
 If ($Library) { Exit 0 }
 
+#Region Setup
 # Force the script to output something to STDOUT, else errors may cause script timeout.
 Output-Host " "
 
@@ -735,7 +746,6 @@ $AlwaysMonitorServices = @( # Services that always are to be monitored if presen
 )
 	
 
-## SETUP ENVIRONMENT
 # Find "Advanced Monitoring Agent" service and use path to locate files
 $gfimaxagent = Get-WmiObject Win32_Service | Where-Object { $_.Name -eq 'Advanced Monitoring Agent' }
 $gfimaxexe = $gfimaxagent.PathName
@@ -830,393 +840,388 @@ $DeviceConfig.Load($DeviceFile)
 # Check Agent mode, workstation or server
 $AgentMode = $AgentConfig.agentconfiguration.agentmode
 
+#EndRegion
+
 # Set interval according to $AgentMode
 If ($AgentMode = "server") { $247Interval = $ServerInterval }
 Else { $247Interval = $PCInterval }
 
-# Check if INI file is correct
-If ($settingsContent["247CHECK"]["ACTIVE"] -ne "1") {
-	$settingsContent["247CHECK"]["ACTIVE"] = "1"
-	$ChangedSettings['247_Checks'] = 'Enabled'
-	$ConfigChanged = $true
-	$settingsChanged = $true
-}
-
+#Region Monitoring Settings
+# Check intervals. They can be modified together with other files.
 If ($settingsContent["247CHECK"]["INTERVAL"] -ne $247Interval) {
 	$settingsContent["247CHECK"]["INTERVAL"] = $247Interval
 	$ChangedSettings['247_Interval'] = $247Interval
 	$ConfigChanged = $true
-	$settingsChanged = $true
-}
-
-If ($settingsContent["DAILYSAFETYCHECK"]["ACTIVE"] -ne "1") {
-	$settingsContent["DAILYSAFETYCHECK"]["ACTIVE"] = "1"
-	$ChangedSettings['DSC_Checks'] = 'Enabled'
-	$ConfigChanged = $true
-	$settingsChanged = $true
 }
 
 If ($settingsContent["DAILYSAFETYCHECK"]["HOUR"] -ne $DSCHour) {
 	$settingsContent["DAILYSAFETYCHECK"]["HOUR"] = $DSCHour
 	$ChangedSettings['DSC_Hour'] = $DSCHour
 	$ConfigChanged = $true
-	$settingsChanged = $true
 }
 
+#EndRegion
 
 # Check for new services that we'd like to monitor'
+If ($settingsContent["247CHECK"]["ACTIVE"] -eq "1") {
+	#Region 24/7 Checks
+	## DRIVESPACECHECK
+	If ($DriveSpaceCheck) {
+		# Process parameters that need processing
+		$SpaceMatch = "^([0-9]+)([gmb%]+)"
+		$Spacetype = $DriveSpaceCheck -replace $SpaceMatch,'$2'
+		$FreeSpace = $DriveSpaceCheck -replace $SpaceMatch,'$1'
 
-## DRIVESPACECHECK
-If ($DriveSpaceCheck) {
-	# Process parameters that need processing
-	$SpaceMatch = "^([0-9]+)([gmb%]+)"
-	$Spacetype = $DriveSpaceCheck -replace $SpaceMatch,'$2'
-	$FreeSpace = $DriveSpaceCheck -replace $SpaceMatch,'$1'
-
-	Switch ($Spacetype.ToUpper().Substring(0,1)) { # SpaceUnits: 0 = Bytes, 1 = MBytes, 2 = GBytes, 3 = Percent
-		"B" { $SpaceUnits = 0 }
-		"M" { $SpaceUnits = 1 }
-		"G" { $SpaceUnits = 2 }
-		"%" { $SpaceUnits = 3 }
-	}
-	
-	# Get current fixed drives from WMI
-	$DetectedDrives = GET-WMIOBJECT -query "SELECT * from win32_logicaldisk where DriveType = '3'" | select -Expandproperty DeviceID
-	
-	# Add any disk not currently in CurrentDiskSpaceChecks
-	foreach ($Disk in $DetectedDrives) {
-		If (($Disk -ne $env:SystemDrive) -and ($AgentMode -eq "workstation")){
-			# Workstations are only monitoring %SystemDrive%
-			Continue
+		Switch ($Spacetype.ToUpper().Substring(0,1)) { # SpaceUnits: 0 = Bytes, 1 = MBytes, 2 = GBytes, 3 = Percent
+			"B" { $SpaceUnits = 0 }
+			"M" { $SpaceUnits = 1 }
+			"G" { $SpaceUnits = 2 }
+			"%" { $SpaceUnits = 3 }
 		}
-		$DriveLetter = $Disk + "\"
-		$oldChecks = Get-MAXfocusCheckList DriveSpaceCheck driveletter $DriveLetter
-		If (!($oldChecks)) {
-			New-MAXfocusCheck DriveSpaceCheck $DriveLetter
-		}
-	}
-}
-
-## Disk Health Status
-If (($SMART) -and (Is-SMARTavailable)) {
-    $oldChecks = Get-MAXfocusCheckList PhysDiskCheck
-	If (!($oldChecks)) {
-		New-MAXfocusCheck PhysDiskCheck
-	}
-}
-
-
-## DISKSPACECHANGE
-#  We only use this on servers
-If (($DiskSpaceChange) -and ($AgentMode -eq "server")) {
 		
-	# Get current fixed drives from WMI
-	$DetectedDrives = GET-WMIOBJECT -query "SELECT * from win32_logicaldisk where DriveType = '3'" | select -ExpandProperty DeviceID
-
-	# Add any disk not currently in CurrentDiskSpaceChecks
-	foreach ($Disk in $DetectedDrives) {
-		$DriveLetter = $Disk + "\"
-		$oldChecks = Get-MAXfocusCheckList DiskSpaceChange driveletter $DriveLetter
-		If (!($oldChecks)) {
-			New-MAXfocusCheck DiskSpaceChange $DriveLetter
-		}
-	}
-}
-
-## WINSERVICECHECK
-#  By default we only monitor services on servers
-
-If (("All", "Default" -contains $WinServiceCheck) -and ($AgentMode -eq "server")) {
-	# We really dont want to keep annoying services in our setup
-	Foreach ($service in $DoNotMonitorServices) {
-		$oldChecks = Get-MAXfocusCheckList WinServiceCheck servicekeyname $service
-		If ($oldChecks) {
-			Remove-MAXfocusChecks $oldChecks
-		}
-	}
-	# An array to store names of services to monitor
-	$ServicesToMonitor = @()
-
-	## SERVICES TO MONITOR
-	If ($WinServiceCheck -eq "Default") { # Only add services that are listed in services.ini
-
-		# Get all currently installed services with autostart enabled from WMI
-		$autorunsvc = Get-WmiObject Win32_Service |  
-		Where-Object { $_.StartMode -eq 'Auto' } | select Displayname,Name
+		# Get current fixed drives from WMI
+		$DetectedDrives = GET-WMIOBJECT -query "SELECT * from win32_logicaldisk where DriveType = '3'" | select -Expandproperty DeviceID
 		
-		Foreach ($service in $autorunsvc) {
-			If (($servicesContent["SERVICES"][$service.Name] -eq "1") -or ($AlwaysMonitorServices -contains $service.Name)) {
+		# Add any disk not currently in CurrentDiskSpaceChecks
+		foreach ($Disk in $DetectedDrives) {
+			If (($Disk -ne $env:SystemDrive) -and ($AgentMode -eq "workstation")){
+				# Workstations are only monitoring %SystemDrive%
+				Continue
+			}
+			$DriveLetter = $Disk + "\"
+			$oldChecks = Get-MAXfocusCheckList DriveSpaceCheck driveletter $DriveLetter
+			If (!($oldChecks)) {
+				New-MAXfocusCheck DriveSpaceCheck $DriveLetter
+			}
+		}
+	}
+
+	## WINSERVICECHECK
+	#  By default we only monitor services on servers
+	If (("All", "Default" -contains $WinServiceCheck) -and ($AgentMode -eq "server")) {
+		# We really dont want to keep annoying services in our setup
+		Foreach ($service in $DoNotMonitorServices) {
+			$oldChecks = Get-MAXfocusCheckList WinServiceCheck servicekeyname $service
+			If ($oldChecks) {
+				Remove-MAXfocusChecks $oldChecks
+			}
+		}
+		# An array to store names of services to monitor
+		$ServicesToMonitor = @()
+
+		## SERVICES TO MONITOR
+		If ($WinServiceCheck -eq "Default") { # Only add services that are listed in services.ini
+
+			# Get all currently installed services with autostart enabled from WMI
+			$autorunsvc = Get-WmiObject Win32_Service |  
+			Where-Object { $_.StartMode -eq 'Auto' } | select Displayname,Name
+			
+			Foreach ($service in $autorunsvc) {
+				If (($servicesContent["SERVICES"][$service.Name] -eq "1") -or ($AlwaysMonitorServices -contains $service.Name)) {
+					$ServicesToMonitor += $service
+				}
+			}
+		} Else { 
+		  	# Add all services configured to autostart if pathname is outside %SYSTEMROOT%
+			# if the service is currently running
+			$autorunsvc = Get-WmiObject Win32_Service | 
+			Where-Object { $_.StartMode -eq 'Auto' -and $_.PathName -notmatch ($env:systemroot -replace "\\", "\\") -and $_.State -eq "Running"} | select Displayname,Name
+			Foreach ($service in $autorunsvc) {
 				$ServicesToMonitor += $service
 			}
-		}
-	} Else { 
-	  	# Add all services configured to autostart if pathname is outside %SYSTEMROOT%
-		# if the service is currently running
-		$autorunsvc = Get-WmiObject Win32_Service | 
-		Where-Object { $_.StartMode -eq 'Auto' -and $_.PathName -notmatch ($env:systemroot -replace "\\", "\\") -and $_.State -eq "Running"} | select Displayname,Name
-		Foreach ($service in $autorunsvc) {
-			$ServicesToMonitor += $service
+
+			# Add all services located in %SYSTEMROOT% only if listed in services.ini
+			$autorunsvc = Get-WmiObject Win32_Service | 
+			Where-Object { $_.StartMode -eq 'Auto' -and $_.PathName -match ($env:systemroot -replace "\\", "\\") } | select Displayname,Name
+			Foreach ($service in $autorunsvc) {
+				If (($servicesContent["SERVICES"][$service.Name] -eq "1") -or ($AlwaysMonitorServices -contains $service.Name)) {
+					$ServicesToMonitor += $service
+				}
+			}
 		}
 
-		# Add all services located in %SYSTEMROOT% only if listed in services.ini
-		$autorunsvc = Get-WmiObject Win32_Service | 
-		Where-Object { $_.StartMode -eq 'Auto' -and $_.PathName -match ($env:systemroot -replace "\\", "\\") } | select Displayname,Name
-		Foreach ($service in $autorunsvc) {
-			If (($servicesContent["SERVICES"][$service.Name] -eq "1") -or ($AlwaysMonitorServices -contains $service.Name)) {
-				$ServicesToMonitor += $service
+		# Ignore Web Protection Agent
+		$DoNotMonitorServices += "WebMonAgent"
+		## SERVICES TO ADD
+		Foreach ($service in $ServicesToMonitor) {
+			If ($DoNotMonitorServices -notcontains $service.Name) {
+				$oldChecks = Get-MAXfocusCheckList WinServiceCheck servicekeyname $service.Name
+				If (!($oldChecks)) {
+					New-MAXfocusCheck WinServiceCheck $service.DisplayName $service.Name
+				}
+			}
+		}
+
+	}
+
+	## Detect any databases and add relevant checks
+	If ($MSSQL) {
+		
+		# Get any SQL services registered on device
+		$SqlInstances = @(Get-SQLInstance)
+
+		If ($SqlInstances.count -gt 0) {
+			# Load SQL server management assembly
+			#[System.Reflection.Assembly]::LoadWithPartialName('Microsoft.SqlServer.SMO') | out-null 
+		
+			Foreach ($Instance in $SqlInstances){
+				$sqlService = Get-WmiObject Win32_Service | where { $_.DisplayName -match $instance.SQLInstance -and $_.PathName -match "sqlservr.exe" -and $_.StartMode -eq 'Auto'}
+				$oldChecks = Get-MAXfocusCheckList WinServiceCheck servicekeyname $sqlService.Name
+				If (!($oldChecks)) {
+					New-MAXfocusCheck WinServiceCheck $sqlService.DisplayName $sqlService.Name
+				}
 			}
 		}
 	}
 
-	# Ignore Web Protection Agent
-	$DoNotMonitorServices += "WebMonAgent"
-	## SERVICES TO ADD
-	Foreach ($service in $ServicesToMonitor) {
-		If ($DoNotMonitorServices -notcontains $service.Name) {
-			$oldChecks = Get-MAXfocusCheckList WinServiceCheck servicekeyname $service.Name
+	# Configure Performance Monitoring Checks
+	If ($Performance -and ($AgentMode -eq "server")) { # Performance monitoring is only available on servers
+		$ThisDevice = Get-WmiObject Win32_ComputerSystem
+		
+		## Processor Queue
+		If ($ThisDevice.Model -notmatch "^virtual|^vmware") {
+			# We are on a physical machine
+			$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 1
 			If (!($oldChecks)) {
-				New-MAXfocusCheck WinServiceCheck $service.DisplayName $service.Name
+				New-MAXfocusCheck PerfCounterCheck Queue
 			}
 		}
-	}
+		
+		## CPU
+		$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 2
+		If (!($oldChecks)) {
+			New-MAXfocusCheck PerfCounterCheck CPU
+		}
+		
+		## RAM
+		[int]$nonpagedpool = 128
+		If ([System.IntPtr]::Size -gt 4) { # 64-bit
+			[int]$TotalMemoryInMB = $ThisDevice.TotalPhysicalMemory / 1MB
+			[int]$nonpagedpool = $nonpagedpool / 1024 * $TotalMemoryInMB
+		}
 
-}
-
-## Detect any databases and add relevant checks
-If ($MSSQL) {
-	
-	# Get any SQL services registered on device
-	$SqlInstances = @(Get-SQLInstance)
-
-	If ($SqlInstances.count -gt 0) {
-		# Load SQL server management assembly
-		#[System.Reflection.Assembly]::LoadWithPartialName('Microsoft.SqlServer.SMO') | out-null 
-	
-		Foreach ($Instance in $SqlInstances){
-			$sqlService = Get-WmiObject Win32_Service | where { $_.DisplayName -match $instance.SQLInstance -and $_.PathName -match "sqlservr.exe" -and $_.StartMode -eq 'Auto'}
-			$oldChecks = Get-MAXfocusCheckList WinServiceCheck servicekeyname $sqlService.Name
+		$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 2
+		If (!($oldChecks)) {
+			New-MAXfocusCheck PerfCounterCheck RAM $nonpagedpool
+		}
+		
+		## Net
+		#  Not on Hyper-V
+		If ($ThisDevice.Model -notmatch "^virtual") {
+			$NetConnections = Get-WmiObject Win32_PerfRawData_Tcpip_Networkinterface | where {$_.BytesTotalPersec -gt 0} | Select -ExpandProperty Name
+			$oldChecks = Get-MAXfocusCheckList PerfCounterCheck Type 4
 			If (!($oldChecks)) {
-				New-MAXfocusCheck WinServiceCheck $sqlService.DisplayName $sqlService.Name
+				Foreach ($Adapter in $NetConnections) {
+					New-MAXfocusCheck PerfCounterCheck Net $Adapter
+				}
+			}
+		}
+		## Disk
+		# Needs physical disks
+		$PhysicalDisks =  $DeviceConfig.configuration.physicaldisks | select -ExpandProperty name | where {$_ -ne "_Total"}
+
+		$oldChecks = Get-MAXfocusCheckList PerfCounterCheck Type 5
+		If (!($oldChecks)) {
+			Foreach	($Disk in $PhysicalDisks ) {
+				New-MAXfocusCheck PerfCounterCheck Disk $Disk
 			}
 		}
 	}
+
+	# Configure ping check
+	if($PingCheck -and ($AgentMode -eq "server")) { # Pingcheck only supported on servers
+		# Get the two closest IP addresses counted from device
+		$trace = @()
+		$trace = Invoke-Expression "tracert -d -w 10 -h 2 8.8.8.8" |
+	       Foreach-Object {
+	           if ($_ -like "*ms*" ) {
+	               $chunks = $_ -split "  " | Where-Object { $_ }
+	               $ip = $chunks[-1]
+				   $ip = @($ip)[0].Trim() -as [IPAddress] 
+				   $ip
+	       }
+		}
+		# If the firewall does not answer to ICMP we wont have an array
+		If ($trace.Count -gt 1)	{ $trace = $trace[1]}
+		If ($trace -is [Net.IPAddress]) {
+			$oldChecks = Get-MAXfocusCheckList PingCheck pinghost $trace
+			If (!($oldChecks)) {
+				New-MAXfocusCheck PingCheck 'Router Next Hop' $trace
+			}
+		}
+		
+	}
+
+	#EndRegion
+} Else {
+	Output-Host '24/7 Checks are disabled. Enable DSC checks on agent'
+	Output-Host 'to configure 24/7 Checks automatically.'
 }
 
 
+If ($settingsContent["DAILYSAFETYCHECK"]["ACTIVE"] -eq "1") {
+	#Region DSC Checks
 
-If ($Performance -and ($AgentMode -eq "server")) { # Performance monitoring is only available on servers
-	$ThisDevice = Get-WmiObject Win32_ComputerSystem
-	
-	## Processor Queue
-	If ($ThisDevice.Model -notmatch "^virtual|^vmware") {
-		# We are on a physical machine
-		$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 1
-		If (!($oldChecks)) {
-			New-MAXfocusCheck PerfCounterCheck Queue
-		}
-	}
-	
-	## CPU
-	$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 2
-	If (!($oldChecks)) {
-		New-MAXfocusCheck PerfCounterCheck CPU
-	}
-	
-	## RAM
-	[int]$nonpagedpool = 128
-	If ([System.IntPtr]::Size -gt 4) { # 64-bit
-		[int]$TotalMemoryInMB = $ThisDevice.TotalPhysicalMemory / 1MB
-		[int]$nonpagedpool = $nonpagedpool / 1024 * $TotalMemoryInMB
-	}
+	## DISKSPACECHANGE
+	#  We only use this on servers
+	If (($DiskSpaceChange) -and ($AgentMode -eq "server")) {
+			
+		# Get current fixed drives from WMI
+		$DetectedDrives = GET-WMIOBJECT -query "SELECT * from win32_logicaldisk where DriveType = '3'" | select -ExpandProperty DeviceID
 
-	$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 2
-	If (!($oldChecks)) {
-		New-MAXfocusCheck PerfCounterCheck RAM $nonpagedpool
-	}
-	
-	## Net
-	#  Not on Hyper-V
-	If ($ThisDevice.Model -notmatch "^virtual") {
-		$NetConnections = Get-WmiObject Win32_PerfRawData_Tcpip_Networkinterface | where {$_.BytesTotalPersec -gt 0} | Select -ExpandProperty Name
-		$oldChecks = Get-MAXfocusCheckList PerfCounterCheck Type 4
-		If (!($oldChecks)) {
-			Foreach ($Adapter in $NetConnections) {
-				New-MAXfocusCheck PerfCounterCheck Net $Adapter
+		# Add any disk not currently in CurrentDiskSpaceChecks
+		foreach ($Disk in $DetectedDrives) {
+			$DriveLetter = $Disk + "\"
+			$oldChecks = Get-MAXfocusCheckList DiskSpaceChange driveletter $DriveLetter
+			If (!($oldChecks)) {
+				New-MAXfocusCheck DiskSpaceChange $DriveLetter
 			}
 		}
 	}
-	## Disk
-	# Needs physical disks
-	$PhysicalDisks =  $DeviceConfig.configuration.physicaldisks | select -ExpandProperty name | where {$_ -ne "_Total"}
 
-	$oldChecks = Get-MAXfocusCheckList PerfCounterCheck Type 5
-	If (!($oldChecks)) {
-		Foreach	($Disk in $PhysicalDisks ) {
-			New-MAXfocusCheck PerfCounterCheck Disk $Disk
-		}
-	}
-}
-
-if($PingCheck -and ($AgentMode -eq "server")) { # Pingcheck only supported on servers
-	# Get the two closest IP addresses counted from device
-	$trace = @()
-	$trace = Invoke-Expression "tracert -d -w 10 -h 2 8.8.8.8" |
-       Foreach-Object {
-           if ($_ -like "*ms*" ) {
-               $chunks = $_ -split "  " | Where-Object { $_ }
-               $ip = $chunks[-1]
-			   $ip = @($ip)[0].Trim() -as [IPAddress] 
-			   $ip
-       }
-	}
-	# If the firewall does not answer to ICMP we wont have an array
-	If ($trace.Count -gt 1)	{ $trace = $trace[1]}
-	If ($trace -is [Net.IPAddress]) {
-		$oldChecks = Get-MAXfocusCheckList PingCheck pinghost $trace
+	## Disk Health Status
+	If (($SMART) -and (Is-SMARTavailable)) {
+	    $oldChecks = Get-MAXfocusCheckList PhysDiskCheck
 		If (!($oldChecks)) {
-			New-MAXfocusCheck PingCheck 'Router Next Hop' $trace
+			New-MAXfocusCheck PhysDiskCheck
 		}
 	}
-	
-}
 
-If ($Backup) {
-	$oldChecks = Get-MAXfocusCheckList BackupCheck
-	If (!($oldChecks)) {
-		$DetectedBackups = $DeviceConfig.configuration.backups | Select -ExpandProperty name -ErrorAction SilentlyContinue
-		Foreach ($BackupProduct in $DetectedBackups){
-			$JobCount = 1
-			$AddCheck = $true
-			Switch ($BackupProduct) {
-				"Backup Exec" {
-					$JobCount = 99 # Make sure unconfigured checks fail
-					$bengine =  Get-WmiObject win32_service | where { $_.PathName -match "bengine.exe" -and $_.DisplayName -match "Backup Exec"}
-					If (!($bengine)){
-						# Only add backup exec check if job engine is present
+	If ($Backup) {
+		$oldChecks = Get-MAXfocusCheckList BackupCheck
+		If (!($oldChecks)) {
+			$DetectedBackups = $DeviceConfig.configuration.backups | Select -ExpandProperty name -ErrorAction SilentlyContinue
+			Foreach ($BackupProduct in $DetectedBackups){
+				$JobCount = 1
+				$AddCheck = $true
+				Switch ($BackupProduct) {
+					"Backup Exec" {
+						$JobCount = 99 # Make sure unconfigured checks fail
+						$bengine =  Get-WmiObject win32_service | where { $_.PathName -match "bengine.exe" -and $_.DisplayName -match "Backup Exec"}
+						If (!($bengine)){
+							# Only add backup exec check if job engine is present
+							 $AddCheck = $false
+						}
+					}
+					"Managed Online Backup" {
+						$MOBsessionFile = "$env:programdata\Managed Online Backup\Backup Manager\SessionReport.xml"
+						[xml]$MOBsessions = Get-Content $MOBsessionFile
+
+						$MOBplugins = @()
+						ForEach ($Session in $MOBsessions.SessionStatistics.Session){
+							If ($MOBplugins -notcontains $Session.plugin){
+								$MOBplugins += $Session.plugin
+							}
+						}
+						$JobCount = $MOBplugins.Count
+					} 
+					"Veeam" {
+						Add-PSSnapin VeeamPSSnapin -ErrorAction SilentlyContinue
+						If ((Get-PSSnapin "*Veeam*" -ErrorAction SilentlyContinue) -eq $null){ 
+							Output-Host "Unable to load Veeam snapin, you must run this on your Veeam backup server, and the Powershell snapin must be installed.`n`n"
+						} Else {
+							$JobCount = (Get-VBRJob|select Name).Count
+						}
+					}
+					"AppAssure v5" {
+						# Accept Default Jobcount, but add check
+					}
+					Default {
+						# Don't add any checks
 						 $AddCheck = $false
 					}
 				}
-				"Managed Online Backup" {
-					$MOBsessionFile = "$env:programdata\Managed Online Backup\Backup Manager\SessionReport.xml"
-					[xml]$MOBsessions = Get-Content $MOBsessionFile
+				If ($AddCheck) { 
+					# We cannot know how many jobs or which days. Better a 
+					# failed check that someone investigates than no check at all
+					New-MAXfocusCheck BackupCheck $BackupProduct $JobCount
+				}
+			}
+		}
+	}
 
-					$MOBplugins = @()
-					ForEach ($Session in $MOBsessions.SessionStatistics.Session){
-						If ($MOBplugins -notcontains $Session.plugin){
-							$MOBplugins += $Session.plugin
+	If ($Antivirus) {
+		$oldChecks = Get-MAXfocusCheckList AVUpdateCheck
+		If (!($oldChecks)) {
+			$DetectedAntiviruses = $DeviceConfig.configuration.antiviruses | Select -ExpandProperty name -ErrorAction SilentlyContinue
+			If (($DetectedAntiviruses) -and ($DetectedAntiviruses -notcontains "Managed Antivirus")) {
+				Foreach ($AVProduct in $DetectedAntiviruses) {
+					$AddCheck = $true
+					Switch -regex ($AVProduct) {
+						'Windows Defender' { $AddCheck = $false }
+						'Trend.+Conventional Scan' {
+							If (Get-TMScanType -ne "Conventional") { $AddCheck = $false }	
+						}
+						'Trend.+Smart Scan' {
+							If (Get-TMScanType -ne "Smart") { $AddCheck = $false }
 						}
 					}
-					$JobCount = $MOBplugins.Count
-				} 
-				"Veeam" {
-					Add-PSSnapin VeeamPSSnapin -ErrorAction SilentlyContinue
-					If ((Get-PSSnapin "*Veeam*" -ErrorAction SilentlyContinue) -eq $null){ 
-						Output-Host "Unable to load Veeam snapin, you must run this on your Veeam backup server, and the Powershell snapin must be installed.`n`n"
-					} Else {
-						$JobCount = (Get-VBRJob|select Name).Count
+					If ($AddCheck) {
+						# Only add a single AV check. Break after adding.
+						New-MAXfocusCheck AVUpdateCheck $AVProduct
+						Break
 					}
-				}
-				"AppAssure v5" {
-					# Accept Default Jobcount, but add check
-				}
-				Default {
-					# Don't add any checks
-					 $AddCheck = $false
-				}
-			}
-			If ($AddCheck) { 
-				# We cannot know how many jobs or which days. Better a 
-				# failed check that someone investigates than no check at all
-				New-MAXfocusCheck BackupCheck $BackupProduct $JobCount
-			}
-		}
-	}
-}
-
-If ($Antivirus) {
-	$oldChecks = Get-MAXfocusCheckList AVUpdateCheck
-	If (!($oldChecks)) {
-		$DetectedAntiviruses = $DeviceConfig.configuration.antiviruses | Select -ExpandProperty name -ErrorAction SilentlyContinue
-		If (($DetectedAntiviruses) -and ($DetectedAntiviruses -notcontains "Managed Antivirus")) {
-			Foreach ($AVProduct in $DetectedAntiviruses) {
-				$AddCheck = $true
-				Switch -regex ($AVProduct) {
-					'Windows Defender' { $AddCheck = $false }
-					'Trend.+Conventional Scan' {
-						If (Get-TMScanType -ne "Conventional") { $AddCheck = $false }	
-					}
-					'Trend.+Smart Scan' {
-						If (Get-TMScanType -ne "Smart") { $AddCheck = $false }
-					}
-				}
-				If ($AddCheck) {
-					# Only add a single AV check. Break after adding.
-					New-MAXfocusCheck AVUpdateCheck $AVProduct
-					Break
 				}
 			}
 		}
 	}
-}
 
-
-If ($LogChecks -and $AgentMode -eq "server") {
-	# Get next Eventlog check UID from settings.ini
-	Try {
-		$rs = $settingsContent["TEST_EVENTLOG"]["NEXTUID"]
-	} Catch {
-		$settingsContent["TEST_EVENTLOG"] = @{ "NEXTUID" = "1" }
-	}
-	[int]$NextUid = $settingsContent["TEST_EVENTLOG"]["NEXTUID"]
-	If ($NextUid -lt 1) { $NextUid = 1 }
-	ForEach ($Check in $DefaultLogChecks) {
-		$oldChecks = Get-MAXfocusCheckList EventLogCheck log $Check.log
-		If (!($oldChecks)) {
-			New-MAXfocusCheck EventLogCheck $NextUid $Check.log $Check.flags $Check.source $Check.ids
-			$NextUid++
+	If ($LogChecks -and $AgentMode -eq "server") {
+		# Get next Eventlog check UID from settings.ini
+		Try {
+			$rs = $settingsContent["TEST_EVENTLOG"]["NEXTUID"]
+		} Catch {
+			$settingsContent["TEST_EVENTLOG"] = @{ "NEXTUID" = "1" }
 		}
-	}
-	# Save updated Eventlog test UID back to settings.ini
-	$settingsContent["TEST_EVENTLOG"]["NEXTUID"] = $NextUid
-	
-	# Get Windows Eventlog names on this device
-	$LogNames = Get-WmiObject win32_nteventlogfile | select -ExpandProperty logfilename
-	ForEach ($Check in $DefaultCriticalEvents) {
-		# If this device doesn't have a targeted eventlog, skip the check
-		If($LogNames -notcontains $Check.eventlog) { Continue }
+		[int]$NextUid = $settingsContent["TEST_EVENTLOG"]["NEXTUID"]
+		If ($NextUid -lt 1) { $NextUid = 1 }
+		ForEach ($Check in $DefaultLogChecks) {
+			$oldChecks = Get-MAXfocusCheckList EventLogCheck log $Check.log
+			If (!($oldChecks)) {
+				New-MAXfocusCheck EventLogCheck $NextUid $Check.log $Check.flags $Check.source $Check.ids
+				$NextUid++
+			}
+		}
+		# Save updated Eventlog test UID back to settings.ini
+		$settingsContent["TEST_EVENTLOG"]["NEXTUID"] = $NextUid
 		
-		If ($Check["eventlog"] -eq "HardwareEvents") {
-			#This guy is special. We need to check if there are any events
-			$HardwareEvents = Get-WmiObject Win32_NTEventLogFile | where { $_.LogFileName -eq "HardwareEvents" }
-			If ($HardwareEvents.NumberOfRecords -eq 0) {
-				Continue
+		# Get Windows Eventlog names on this device
+		$LogNames = Get-WmiObject win32_nteventlogfile | select -ExpandProperty logfilename
+		ForEach ($Check in $DefaultCriticalEvents) {
+			# If this device doesn't have a targeted eventlog, skip the check
+			If($LogNames -notcontains $Check.eventlog) { Continue }
+			
+			If ($Check["eventlog"] -eq "HardwareEvents") {
+				#This guy is special. We need to check if there are any events
+				$HardwareEvents = Get-WmiObject Win32_NTEventLogFile | where { $_.LogFileName -eq "HardwareEvents" }
+				If ($HardwareEvents.NumberOfRecords -eq 0) {
+					Continue
+				}
+			}
+			# Add check if missing
+			$oldChecks = Get-MAXfocusCheckList CriticalEvents eventlog $Check.eventlog
+			If (!($oldChecks)) {
+				New-MAXfocusCheck CriticalEvents $Check.eventlog $Check.mode
 			}
 		}
-		# Add check if missing
-		$oldChecks = Get-MAXfocusCheckList CriticalEvents eventlog $Check.eventlog
-		If (!($oldChecks)) {
-			New-MAXfocusCheck CriticalEvents $Check.eventlog $Check.mode
-		}
 	}
+	#EndRegion
+} Else {
+	Output-Host 'Daily Safety Checks are disabled. Enable DSC checks on agent'
+	Output-Host 'to configure DSC automatically.'
 }
 
+
+#Region Save and Restart
 
 If ($ConfigChanged) {
 	If ($Apply) {
-		
-		# Update last runtime to prevent changes too often
-		[int]$currenttime = $(get-date -UFormat %s) -replace ",","." # Handle decimal comma 
-		$settingsContent["DAILYSAFETYCHECK"]["RUNTIME"] = $currenttime
-		
-		# Clear lastcheckday to make DSC run immediately
-		$settingsContent["DAILYSAFETYCHECK"]["LASTCHECKDAY"] = "0"
-		
+
 				
 		# Save all relevant config files
 		ForEach ($Set in $Sets) {
 			$XmlConfig[$Set].Save($XmlFile[$Set])
 		}
-		Out-IniFile $settingsContent $IniFile
 		
 		# Write output to $LastChangeFile
 		# Overwrite file with first command
@@ -1296,3 +1301,4 @@ If ($ConfigChanged) {
 	Exit 0 # SUCCESS
 }
 
+#EndRegion
