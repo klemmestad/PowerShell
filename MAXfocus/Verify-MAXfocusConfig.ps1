@@ -47,6 +47,7 @@ param (
 	[string]$ServerInterval = "15", # 5 or 15 minutes
 	[string]$PCInterval = "60", # 30 or 60 minutes
 	[string]$DSCHour = "8", # When DSC check should run in whole hours. Minutes not supported by agent.
+	[switch]$Reset = $false, # A one-time reset switch that will remove overwrite existing checks in all chosen categories.
 	[switch]$Debug = $false,
 	[switch]$Verbose = $false,
 	[string]$logfile, # A parameter always supplied by MAXfocus. We MUST accept it.
@@ -203,18 +204,15 @@ Del /F $RestartScript
 	$JobTime = (Get-Date).AddMinutes(-2)
 	$StartTime = Get-Date $JobTime -Format HH:mm
 	$TaskName = "Restart Advanced Monitoring Agent"
-	$Result = &schtasks.exe /Create /TN $TaskName /TR "$RestartScript" /RU SYSTEM /SC ONCE /ST $StartTime /F
+	$Result = &schtasks.exe /Create /TN $TaskName /TR "$RestartScript" /RU SYSTEM /SC ONCE /ST $StartTime /F 2>&1
 	If ($Result) {
 		Output-Debug "Restarting Agent using scheduled task now."
-		$Result = &schtasks.exe /run /TN "$TaskName"
+		$Result = &schtasks.exe /run /TN "$TaskName" 2>&1
 	} 
 		
-	If (!($Result -like 'SUCCESS:*')) {
-		Output-Debug "SCHTASKS.EXE failed. Restarting service the hard way."
-		Restart-Service 'Advanced Monitoring Agent'
+	If ($LASTEXITCODE -ne 0) {
+		Output-Debug "SCHTASKS.EXE failed. Could not restart agent. Changes lost."
 	}
-	
-	
 }
 
 function New-MAXfocusCheck (
@@ -843,7 +841,7 @@ $AgentMode = $AgentConfig.agentconfiguration.agentmode
 #EndRegion
 
 # Set interval according to $AgentMode
-If ($AgentMode = "server") { $247Interval = $ServerInterval }
+If ($AgentMode -eq "server") { $247Interval = $ServerInterval }
 Else { $247Interval = $PCInterval }
 
 #Region Monitoring Settings
@@ -865,6 +863,19 @@ If ($settingsContent["DAILYSAFETYCHECK"]["HOUR"] -ne $DSCHour) {
 # Check for new services that we'd like to monitor'
 If ($settingsContent["247CHECK"]["ACTIVE"] -eq "1") {
 	#Region 24/7 Checks
+	
+	If ($Reset) {
+		$CheckTypes = @()
+		If ($DriveSpaceCheck)	{$CheckTypes += 'DriveSpaceCheck'}
+		If ($WinServiceCheck)	{$CheckTypes += 'WinServiceCheck'}
+		If ($Performance)		{$CheckTypes += 'PerfCounterCheck'}
+		If ($PingCheck) 		{$CheckTypes += 'PingCheck'}
+		Foreach ($OldCheck in $XmlConfig['247'].checks.ChildNodes) {
+			If ($CheckTypes.Contains($OldCheck.LocalName)) {
+				$OldCheck.ParentNode.RemoveChild($OldCheck)
+			}
+		}
+	}
 	## DRIVESPACECHECK
 	If ($DriveSpaceCheck) {
 		# Process parameters that need processing
@@ -1000,7 +1011,7 @@ If ($settingsContent["247CHECK"]["ACTIVE"] -eq "1") {
 			[int]$nonpagedpool = $nonpagedpool / 1024 * $TotalMemoryInMB
 		}
 
-		$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 2
+		$oldChecks = Get-MAXfocusCheckList PerfCounterCheck type 3
 		If (!($oldChecks)) {
 			New-MAXfocusCheck PerfCounterCheck RAM $nonpagedpool
 		}
@@ -1054,14 +1065,30 @@ If ($settingsContent["247CHECK"]["ACTIVE"] -eq "1") {
 
 	#EndRegion
 } Else {
-	Output-Host '24/7 Checks are disabled. Enable DSC checks on agent'
-	Output-Host 'to configure 24/7 Checks automatically.'
+	Output-Host '24/7 Checks are disabled. Enable 24/7 checks on agent'
+	Output-Host 'to configure 24/7 Checks automatically. To bulk update'
+	Output-Host 'use Add Checks... and add a single, relevant 24/7 check'
+	Output-Host 'to any device you want to use with this script. '
+	Output-Host '"Windows Service Check - Windows Event Log" is a good choice. '
 }
 
 
 If ($settingsContent["DAILYSAFETYCHECK"]["ACTIVE"] -eq "1") {
 	#Region DSC Checks
-
+	
+	If ($Reset) {
+		$CheckTypes = @()
+		If ($DiskSpaceChange)	{$CheckTypes += 'DiskSpaceChange'}
+		If ($SMART)				{$CheckTypes += 'PhysDiskCheck'}
+		If ($Backup)			{$CheckTypes += 'BackupCheck'}
+		If ($Antivirus) 		{$CheckTypes += 'AVUpdateCheck'}
+		If ($LogChecks) 		{$CheckTypes += 'EventLogCheck'}
+		Foreach ($OldCheck in $XmlConfig['DSC'].checks.ChildNodes) {
+			If ($CheckTypes.Contains($OldCheck.LocalName)) {
+				$OldCheck.ParentNode.RemoveChild($OldCheck)
+			}
+		}
+	}
 	## DISKSPACECHANGE
 	#  We only use this on servers
 	If (($DiskSpaceChange) -and ($AgentMode -eq "server")) {
@@ -1208,7 +1235,10 @@ If ($settingsContent["DAILYSAFETYCHECK"]["ACTIVE"] -eq "1") {
 	#EndRegion
 } Else {
 	Output-Host 'Daily Safety Checks are disabled. Enable DSC checks on agent'
-	Output-Host 'to configure DSC automatically.'
+	Output-Host 'to configure DSC automatically. To bulk update'
+	Output-Host 'use Add Checks... and add a single, relevant DSC check'
+	Output-Host 'to any device you want to use with this script. '
+	Output-Host 'Adding this script as a script check is our own preferred choice.'
 }
 
 
@@ -1216,7 +1246,27 @@ If ($settingsContent["DAILYSAFETYCHECK"]["ACTIVE"] -eq "1") {
 
 If ($ConfigChanged) {
 	If ($Apply) {
-
+		# Remove Reset Switch, but changes to ST_Config does not sync back to
+		# Dashboard.
+		If ($Reset) {
+			If ($logfile -match '_(\d+)\.log') {
+				$scriptuid = $Matches[1]
+			}
+			$OldCheck = $XmlConfig['DSC'].SelectSingleNode(("//*[@uid=$scriptuid]"))
+			If (!$OldCheck) {
+				$STConfig = New-Object -TypeName XML
+				$STConfig.Load($gfimaxpath + '\ST_Config.xml')
+				$OldCheck = $STConfig.SelectSingleNode(("//*[@uid=$scriptuid]"))
+			}
+			If ($OldCheck.arguments -is [System.Xml.XmlElement]) {
+				$OldCheck.arguments.set_InnerText($OldCheck.arguments.InnerText.Replace('-Reset',''))
+			} Else {
+				$OldCheck.arguments = $OldCheck.arguments.Replace('-Reset','')
+			}
+			If ($STConfig) {
+				$STConfig.Save($gfimaxpath + '\ST_Config.xml')
+			}
+		}
 				
 		# Save all relevant config files
 		ForEach ($Set in $Sets) {
@@ -1235,7 +1285,7 @@ If ($ConfigChanged) {
 			"`nAdded the following checks to configuration file:" | Out-File -Append $LastChangeFile
 			Format-Output $NewChecks | Out-File -Append $LastChangeFile
 		}	
-		
+		Output-Host 'Configuration has been changed. Initiating restart of agent.'
 		Restart-MAXfocusService
 		
 		If ($ReportMode) {
