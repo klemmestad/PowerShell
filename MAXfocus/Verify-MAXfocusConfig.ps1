@@ -100,7 +100,6 @@ If ($All)
 	$LogChecks = $true # Configure default eventlog checks
 	$ServerInterval = "5"
 	$PCInterval = "30"
-	$ReportMode = $true
 }
 
 # Convert Reportmode to Boolean
@@ -211,7 +210,7 @@ Del /F $RestartScript
 	} 
 		
 	If ($LASTEXITCODE -ne 0) {
-		Output-Debug "SCHTASKS.EXE failed. Could not restart agent. Changes lost."
+		Output-Host "SCHTASKS.EXE failed. Could not restart agent. Changes lost."
 	}
 }
 
@@ -731,13 +730,16 @@ $DefaultCriticalEvents = @(
 	   "mode" = 0 }
 )
 
-$DoNotMonitorServices = @( # Services you do not wish to monitor, regardless
+# Services you do not wish to monitor, regardless. Important list when you
+# are adding service checks automatically
+$DoNotMonitorServices = @(
 	"wuauserv", # Windows Update Service. Does not run continously.
 	"gupdate", "gupdatem", # Google Update Services. Does not always run.
 	"AdobeARMservice", # Another service you may not want to monitor
 	"Windows Agent Maintenance Service", # Clean up after N-Able
-	"Windows Agent Service",
-	"RSMWebServer"
+	"Windows Agent Service", # Clean up after N-Able
+	"RSMWebServer", # Clean up after N-Able
+	"gpsvc" # Group Policy Client
 )
 $AlwaysMonitorServices = @( # Services that always are to be monitored if present and autorun
 	"wecsvc" # Windows Event Collector
@@ -1346,7 +1348,7 @@ If ($ConfigChanged) {
 	If (!($FailureActions)) {
 		# Reset count every 24 hours, restart service after twice the 247Interval minutes
 		$servicename = $gfimaxagent.Name
-		&sc.exe failure "$servicename" reset=86400 actions=restart/600000
+		&sc.exe failure "$servicename" reset= 86400 actions= restart/600000
 	}
 	Exit 0 # SUCCESS
 }
