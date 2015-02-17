@@ -182,6 +182,7 @@ If (!((Get-WmiObject Win32_Process -Filter "ProcessID=$PID").CommandLine -match 
 
 #Region Functions
 function Restart-MAXfocusService ([bool]$Safely=$true) {
+	# Save all relevant config files
 	If ($Safely) {	
 		# Update last runtime to prevent changes too often
 		[int]$currenttime = $(get-date -UFormat %s) -replace ",","." # Handle decimal comma 
@@ -189,14 +190,22 @@ function Restart-MAXfocusService ([bool]$Safely=$true) {
 	}
 	# Clear lastcheckday to make DSC run immediately
 	$settingsContent["DAILYSAFETYCHECK"]["LASTCHECKDAY"] = "0"
-	Out-IniFile $settingsContent $IniFile
-		
+	Out-IniFile $settingsContent $IniFile.Replace('.ini','newini')
+	# Save XML files to NEW files
+	ForEach ($Set in $Sets) {
+		$XmlConfig[$Set].Save($XmlFile[$Set].Replace('.xml','.newxml'))
+	}
+	
 	# Prepare restartscript
 	$RestartScript = $env:TEMP + "\RestartMAXfocusAgent.cmd"
 	$RestartScriptContent = @"
 net stop "Advanced Monitoring Agent"
+cd "$gfimaxpath"
+move /y 247_config.newxml 247_config.xml
+move /y DSC_config.newxml DSC_config.xml
+move /y settings.newini settings.ini
 net start "Advanced Monitoring Agent"
-Del /F $RestartScript
+Del /F "$RestartScript"
 "@
 	$RestartScriptContent | Out-File -Encoding OEM $RestartScript
 	# Start time in the future
@@ -1268,11 +1277,6 @@ If ($ConfigChanged) {
 			If ($STConfig) {
 				$STConfig.Save($gfimaxpath + '\ST_Config.xml')
 			}
-		}
-				
-		# Save all relevant config files
-		ForEach ($Set in $Sets) {
-			$XmlConfig[$Set].Save($XmlFile[$Set])
 		}
 		
 		# Write output to $LastChangeFile
