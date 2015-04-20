@@ -10,7 +10,7 @@
 .LINK
    http://klemmestad.com/2014/12/10/add-snmp-checks-to-maxfocus-automatically/
 .VERSION
-   1.12
+   1.13
 #>
 
 # Using [string] for almost all parameters to avoid parameter validation fail
@@ -340,6 +340,7 @@ Try {
 		Output-Verbose ("Starting download from {0}" -f $SNMP_lib_URL)
 		$webclient.DownloadFile($SNMP_lib_URL,$SNMP_lib)
 		Output-Verbose "SNMP library not found. Downloaded from web."
+		Unblock-File -Path $SNMP_lib
 	}
 
 	$null = [reflection.assembly]::LoadFrom($SNMP_lib)
