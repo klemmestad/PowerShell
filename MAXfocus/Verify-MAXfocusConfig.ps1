@@ -21,7 +21,7 @@
 .LINK
    https://www.maxfocus.com/remote-management/automated-maintenance
 .VERSION
-   1.24
+   1.25
 .FUNCTIONALITY
    When the script finds that checks has to be added it will create valid XML
    entries and add them to agent configuration files. It uses Windows scheduled
@@ -190,7 +190,7 @@ function Restart-MAXfocusService ([bool]$Safely=$true) {
 	}
 	# Clear lastcheckday to make DSC run immediately
 	$settingsContent["DAILYSAFETYCHECK"]["LASTCHECKDAY"] = "0"
-	Out-IniFile $settingsContent $IniFile.Replace('.ini','newini')
+	Out-IniFile $settingsContent $IniFile.Replace('.ini','.newini')
 	# Save XML files to NEW files
 	ForEach ($Set in $Sets) {
 		$XmlConfig[$Set].Save($XmlFile[$Set].Replace('.xml','.newxml'))
@@ -712,10 +712,10 @@ Output-Host " "
 
 
 $DefaultLogChecks = @(
-	@{ "log" = "Application|Application Hangs"; # Application log | Human readable name
-	   "flags" = 32512;
-	   "ids" = "*";
-	   "source" = "Application Hang" }
+#	@{ "log" = "Application|Application Hangs"; # Application log | Human readable name
+#	   "flags" = 32512;
+#	   "ids" = "*";
+#	   "source" = "Application Hang" }
 	@{ "log" = "System|NTFS Errors";
 	   "flags" = 32513;
 	   "ids" = "*";
@@ -1080,7 +1080,9 @@ If ($settingsContent["247CHECK"]["ACTIVE"] -eq "1") {
 	Output-Host 'to configure 24/7 Checks automatically. To bulk update'
 	Output-Host 'use Add Checks... and add a single, relevant 24/7 check'
 	Output-Host 'to any device you want to use with this script. '
-	Output-Host '"Windows Service Check - Windows Event Log" is a good choice. '
+	Output-Host 'With Agent v09.5.7+ you can use Apply Template (preferred'
+    Output-Host 'Option).'
+
 }
 
 
@@ -1250,6 +1252,7 @@ If ($settingsContent["DAILYSAFETYCHECK"]["ACTIVE"] -eq "1") {
 	Output-Host 'use Add Checks... and add a single, relevant DSC check'
 	Output-Host 'to any device you want to use with this script. '
 	Output-Host 'Adding this script as a script check is our own preferred choice.'
+	Output-Host 'With Agent v09.5.7+ you can use Apply Template, too.'
 }
 
 
