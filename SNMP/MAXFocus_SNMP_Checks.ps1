@@ -10,7 +10,7 @@
 .LINK
    http://klemmestad.com/2014/12/10/add-snmp-checks-to-maxfocus-automatically/
 .VERSION
-   1.13
+   1.14
 #>
 
 # Using [string] for almost all parameters to avoid parameter validation fail
@@ -340,7 +340,9 @@ Try {
 		Output-Verbose ("Starting download from {0}" -f $SNMP_lib_URL)
 		$webclient.DownloadFile($SNMP_lib_URL,$SNMP_lib)
 		Output-Verbose "SNMP library not found. Downloaded from web."
-		Unblock-File -Path $SNMP_lib
+		If ($PSVersionTable.PSVersion.Major -gt 2) {
+            Unblock-File -Path $SNMP_lib
+        }
 	}
 
 	$null = [reflection.assembly]::LoadFrom($SNMP_lib)
@@ -372,8 +374,8 @@ Try {
 	$SNMPhosts = @()
 
 	If ($Target -match "/") {
-		$FirstIP = @((Get-IPV4NetworkStartIP ($Target)).ToString().Split("."))
-		$LastIP = @((Get-IPV4NetworkEndIP ($Target)).ToString().Split("."))
+		$FirstIP = @((Get-IPV4NetworkStartIP ($Target[0])).ToString().Split("."))
+		$LastIP = @((Get-IPV4NetworkEndIP ($Target[0])).ToString().Split("."))
 
 		ForEach ($Byte1 in $FirstIP[0]..$LastIP[0]) {
 			ForEach ($Byte2 in $FirstIP[1]..$LastIP[1]) {
