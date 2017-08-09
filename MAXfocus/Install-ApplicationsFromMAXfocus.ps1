@@ -373,4 +373,21 @@ If ($InstallPackages.Count -gt 0) {
 	}
 }
 
+# Add path modifications to System Path 
+$UserPath = (Get-ItemProperty -Path 'HKCU:\ENVIRONMENT' -Name PATH -ErrorAction SilentlyContinue).PATH
+If ($UserPath) {
+	$SystemPath = (Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Session Manager\Environment' -Name PATH).PATH
+	$OLDPATH = $SystemPath
+	Foreach ($Path in $UserPath.Split(';')) {
+		$Path = $Path.Replace(';','')
+		If ($OLDPATH -notmatch $Path) {
+			$SystemPath += ";$Path"
+		}
+	}
+	If ($SystemPath -ne $OLDPATH) {
+		Set-ItemProperty $($(Get-Item 'HKLM:\System\CurrentControlSet\Control\Session Manager\Environment').PSPath) -name PATH -value $SystemPath -Force
+	}
+	Set-ItemProperty $($(Get-Item 'HKCU:\ENVIRONMENT').PSPath) -name PATH -value '' -Force
+}
+
 Exit 0
